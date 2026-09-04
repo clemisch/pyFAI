@@ -71,6 +71,9 @@ class DiffractionImagePlotWidget(ImagePlotWidget):
             self.resetZoom()
             self._first_plot = False
         self.setGraphTitle(title)
+        backend = self.getBackend()
+        if hasattr(backend, "ax"):
+            backend.ax.title.set_fontsize(11)
 
     def getImageIndices(self, x_data: float, y_data: float) -> ImageIndices | None:
         tmp = self.dataToPixel(x_data, y_data)

@@ -70,7 +70,6 @@ from .widgets.RietveldRefinementWidget import (
     RietveldRefinementDialog,
     RietveldRefinementThread,
 )
-from .widgets.TitleWidget import TitleWidget
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +105,6 @@ class MainWindow(qt.QMainWindow):
         self._integrated_plot_widget.roi.sigRegionChanged.connect(self.onRoiEdition)
         self._integrated_plot_widget.roi.sigRegionChanged.connect(self.drawContoursOnImage)
 
-        self._title_widget = TitleWidget(self)
-
         self._refinement_widget = RietveldRefinementDialog(self)
         self._refinement_widget.refinementRequested.connect(
             self.runRietveldRefinement
@@ -136,7 +133,6 @@ class MainWindow(qt.QMainWindow):
         layout = qt.QVBoxLayout(self._central_widget)
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._title_widget)
         layout.addWidget(plot_splitter, 1)
         self._central_widget.setLayout(layout)
         self.setCentralWidget(self._central_widget)
@@ -252,7 +248,6 @@ class MainWindow(qt.QMainWindow):
         self._refinement_widget.setCifPaths(cifs)
         self._refinement_widget.setStatus("Ready")
 
-        self._title_widget.setText(os.path.basename(file_name))
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_label, slow_label)
         # BUG: selectMapPoint(0, 0) does not work at first render cause the picking fails
         initial_indices = ImageIndices(0, 0)
