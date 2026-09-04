@@ -9,6 +9,7 @@ py.install_sources(
 'MapPlotContextMenu.py',
 'RoiModeAction.py',
 'RoiRangeWidget.py',
+'RietveldRefinementWidget.py',
 'TitleWidget.py',
   ],
   pure: false,   # Will be installed next to binaries

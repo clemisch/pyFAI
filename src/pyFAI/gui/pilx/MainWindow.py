@@ -66,6 +66,10 @@ from .utils import (
 from .widgets.DiffractionImagePlotWidget import DiffractionImagePlotWidget
 from .widgets.IntegratedPatternPlotWidget import IntegratedPatternPlotWidget
 from .widgets.MapPlotWidget import MapPlotWidget
+from .widgets.RietveldRefinementWidget import (
+    RietveldRefinementThread,
+    RietveldRefinementWidget,
+)
 from .widgets.TitleWidget import TitleWidget
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,14 @@ class MainWindow(qt.QMainWindow):
 
         self._title_widget = TitleWidget(self)
 
+        self._refinement_widget = RietveldRefinementWidget(self)
+        refinement_dock = qt.QDockWidget("Rietveld refinement", self)
+        refinement_dock.setWidget(self._refinement_widget)
+        self.addDockWidget(qt.Qt.RightDockWidgetArea, refinement_dock)
+        self._refinement_widget.refinementRequested.connect(
+            self.runRietveldRefinement
+        )
+
         self._central_widget = qt.QWidget()
         layout = qt.QGridLayout(self._central_widget)
         layout.setSpacing(0)
@@ -117,6 +129,7 @@ class MainWindow(qt.QMainWindow):
         self._unfixed_indices = None
         self._fixed_indices = set()
         self._background_point = None
+        self._refinement_thread = None
         self.worker_config = None
 
         # declaration of instance variables
@@ -166,7 +179,8 @@ class MainWindow(qt.QMainWindow):
                 self.worker_config = WorkerConfig.from_dict(pyFAI_config_as_dict, inplace=True)
 
             radial_dset = get_radial_dataset(nxdata, size=self.worker_config.nbpt_rad)
-            delta_radial = (radial_dset[-1] - radial_dset[0]) / len(radial_dset)
+            radial_values = radial_dset[()]
+            delta_radial = (radial_values[-1] - radial_values[0]) / len(radial_values)
 
             if "offset" in nxprocess:
                 self._offset = nxprocess["offset"][()]
@@ -207,6 +221,21 @@ class MainWindow(qt.QMainWindow):
 
         self._radial_matrix = compute_radial_values(self.worker_config)
         self._delta_radial_over_2 = delta_radial / 2
+
+        wavelength = self.worker_config.poni.wavelength
+        if wavelength is not None:
+            self._refinement_widget.setWavelength(wavelength * 1e10)
+        self._refinement_widget.setRadialRange(
+            float(radial_values[0]), float(radial_values[-1])
+        )
+        cif_directory = os.path.dirname(self._file_name)
+        cifs = sorted(
+            os.path.join(cif_directory, filename)
+            for filename in os.listdir(cif_directory)
+            if filename.lower().endswith(".cif")
+        )
+        self._refinement_widget.setCifPaths(cifs)
+        self._refinement_widget.setStatus("Ready")
 
         self._title_widget.setText(os.path.basename(file_name))
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_label, slow_label)
@@ -340,6 +369,8 @@ class MainWindow(qt.QMainWindow):
         else:
             self._unfixed_indices = indices
 
+        self.clearRietveldCurves()
+        self._refinement_widget.setStatus("Ready")
         self.displayPatternAtIndices(indices, legend="INTEGRATE")
         self.displayImageAtIndices(indices)
         pixel_center_coords = self._map_plot_widget.findCenterOfNearestPixel(x, y)
@@ -509,6 +540,199 @@ class MainWindow(qt.QMainWindow):
     def clearPoints(self):
         for indices in self._fixed_indices.copy():
             self.removeMapPoint(indices=indices)
+
+    def clearRietveldCurves(self):
+        for legend in list(self._integrated_plot_widget):
+            if legend.startswith("Rietveld:"):
+                self._integrated_plot_widget.removeCurve(legend=legend)
+        self._integrated_plot_widget.setLegendsVisible(False)
+
+    def runRietveldRefinement(self):
+        if self._file_name is None or self._unfixed_indices is None:
+            self.warning("No map point is selected for refinement")
+            return
+        if self._refinement_thread is not None:
+            return
+
+        point = Point(
+            self._unfixed_indices,
+            url_nxdata_path=f"{self._file_name}?{self._nxprocess_path}/result",
+        )
+        radial_unit = point.get_x_unit()
+        if isinstance(radial_unit, bytes):
+            radial_unit = radial_unit.decode()
+        if radial_unit is not None and radial_unit.lower() not in {
+            "deg",
+            "degree",
+            "degrees",
+        }:
+            self.warning(
+                "Rietveld refinement currently requires a 2θ axis in degrees"
+            )
+            return
+
+        cifs = self._refinement_widget.cifPaths()
+        if not cifs:
+            self.warning("Select at least one CIF before refinement")
+            return
+
+        ttheta_min, ttheta_max = self._refinement_widget.radialRange()
+        if ttheta_min >= ttheta_max:
+            self.warning("The refinement 2θ minimum must be below the maximum")
+            return
+
+        flags = self._refinement_widget.refinementFlags()
+        schedule = []
+        if flags["scale"] or flags["displacement"]:
+            schedule.append(
+                {
+                    "n_iters": 20,
+                    "scale": flags["scale"],
+                    "displace_sample": flags["displacement"],
+                    "rwp_tol": 0.01,
+                }
+            )
+        if flags["unit_cell"]:
+            schedule.append(
+                {
+                    "n_iters": 30,
+                    "scale": flags["scale"],
+                    "displace_sample": flags["displacement"],
+                    "a": True,
+                    "b": True,
+                    "c": True,
+                    "alpha": True,
+                    "beta": True,
+                    "gamma": True,
+                    "rwp_tol": 0.01,
+                }
+            )
+        if flags["peak_width"]:
+            schedule.append(
+                {
+                    "n_iters": 100,
+                    "scale": flags["scale"],
+                    "displace_sample": flags["displacement"],
+                    "a": flags["unit_cell"],
+                    "b": flags["unit_cell"],
+                    "c": flags["unit_cell"],
+                    "alpha": flags["unit_cell"],
+                    "beta": flags["unit_cell"],
+                    "gamma": flags["unit_cell"],
+                    "W": True,
+                    "Eta0": True,
+                    "rwp_tol": 0.01,
+                }
+            )
+        if not schedule:
+            self.warning("Select at least one refinement parameter")
+            return
+
+        inputs = {
+            "ttheta_deg": point.get_radial_curve(),
+            "intensity": point.get_curve(),
+            "cifs": cifs,
+            "instprm": {
+                "lambda_A": self._refinement_widget.wavelength(),
+                "W": 1e-6,
+                "Eta0": 0.0,
+            },
+            "schedule": schedule,
+            "ttheta_range_deg": (ttheta_min, ttheta_max),
+        }
+        intensity_error = point.get_uncertainty_curve()
+        if intensity_error is not None:
+            inputs["intensity_error"] = intensity_error
+
+        self.clearRietveldCurves()
+        self._refinement_widget.setRunning(True)
+        self._refinement_widget.setStatus(
+            f"Refining point [{point.indices.row}, {point.indices.col}]…"
+        )
+        self._refinement_thread = RietveldRefinementThread(
+            inputs,
+            point.indices,
+            parent=self,
+        )
+        self._refinement_thread.finished.connect(
+            self.onRietveldRefinementFinished
+        )
+        self._refinement_thread.start()
+
+    def onRietveldRefinementFinished(self):
+        thread = self._refinement_thread
+        self._refinement_thread = None
+        self._refinement_widget.setRunning(False)
+
+        if thread.error is not None:
+            logger.error("Rietveld refinement failed:\n%s", thread.error)
+            message = thread.error.strip().splitlines()[-1]
+            self._refinement_widget.setStatus(f"Refinement failed: {message}")
+            self.warning(f"Rietveld refinement failed: {message}")
+            thread.deleteLater()
+            return
+
+        if thread.indices != self._unfixed_indices:
+            self._refinement_widget.setStatus(
+                "Refinement finished for a point which is no longer selected"
+            )
+            thread.deleteLater()
+            return
+
+        result = thread.result
+        x = result["ttheta_deg"]
+        background = result["background"]
+        self._integrated_plot_widget.addCurve(
+            x,
+            result["calculated"],
+            legend="Rietveld: total",
+            color="#d62728",
+            linewidth=1.5,
+            selectable=False,
+            resetzoom=False,
+        )
+        self._integrated_plot_widget.addCurve(
+            x,
+            background,
+            legend="Rietveld: background",
+            color="#7f7f7f",
+            linewidth=1.0,
+            selectable=False,
+            resetzoom=False,
+        )
+        phase_colors = (
+            "#2ca02c",
+            "#9467bd",
+            "#8c564b",
+            "#e377c2",
+            "#bcbd22",
+            "#17becf",
+            "#ff7f0e",
+        )
+        for index, (phase, phase_calculated) in enumerate(
+            result["phase_patterns"].items()
+        ):
+            self._integrated_plot_widget.addCurve(
+                x,
+                background + phase_calculated,
+                legend=f"Rietveld: {phase}",
+                color=phase_colors[index % len(phase_colors)],
+                linewidth=1.0,
+                selectable=False,
+                resetzoom=False,
+            )
+
+        self._integrated_plot_widget.setLegendsVisible(True)
+        rwp = result["history"][-1]["Rw"]
+        self._refinement_widget.setStatus(
+            f"Point [{thread.indices.row}, {thread.indices.col}], Rwp {rwp:.2f}%"
+        )
+        thread.deleteLater()
+
+    def closeEvent(self, event):
+        if self._refinement_thread is not None:
+            self._refinement_thread.wait()
+        super().closeEvent(event)
 
     def warning(self, error_msg):
         """Log a warning both in the terminal and in the status bar if possible

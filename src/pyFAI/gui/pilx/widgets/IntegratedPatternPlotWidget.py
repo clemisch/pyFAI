@@ -37,6 +37,7 @@ __status__ = "development"
 
 from silx.gui import qt
 from silx.gui.plot import PlotWidget
+from silx.gui.plot.LegendSelector import LegendsDockWidget
 from silx.gui.plot.actions.control import ResetZoomAction
 from silx.gui.plot.actions.io import SaveAction
 from silx.gui.plot.actions.mode import PanModeAction, ZoomModeAction
@@ -68,6 +69,10 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._toolbar = self._initToolbar()
         self.addToolBar(self._toolbar)
 
+        self._legends = LegendsDockWidget(parent=self, plot=self)
+        self.addDockWidget(qt.Qt.RightDockWidgetArea, self._legends)
+        self._legends.hide()
+
         self._statusBar = self._initStatusBar()
         centralWidget = self._initCentralWidget(self._statusBar)
         self.setCentralWidget(centralWidget)
@@ -75,6 +80,8 @@ class IntegratedPatternPlotWidget(PlotWidget):
     def __iter__(self):
         yield from self.getAllCurves(just_legend=True)
 
+    def setLegendsVisible(self, visible):
+        self._legends.setVisible(visible)
 
     def _initRoi(self):
         roi = HorizontalRangeROI()
