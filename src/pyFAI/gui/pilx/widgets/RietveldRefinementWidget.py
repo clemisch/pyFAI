@@ -88,6 +88,19 @@ class RietveldRefinementDialog(qt.QDialog):
         self._wavelength.setDecimals(6)
         self._wavelength.setRange(0.000001, 100.0)
         self._wavelength.setSuffix(" Å")
+        self._file_wavelength = None
+        self._load_wavelength = qt.QPushButton("From file", self)
+        self._load_wavelength.setEnabled(False)
+        self._load_wavelength.setToolTip(
+            "Restore the wavelength from the diffmap integration configuration"
+        )
+        self._load_wavelength.clicked.connect(self._restoreFileWavelength)
+        wavelength_layout = qt.QHBoxLayout()
+        wavelength_layout.setContentsMargins(0, 0, 0, 0)
+        wavelength_layout.addWidget(self._wavelength)
+        wavelength_layout.addWidget(self._load_wavelength)
+        wavelength_widget = qt.QWidget(self)
+        wavelength_widget.setLayout(wavelength_layout)
 
         self._ttheta_min = qt.QDoubleSpinBox(self)
         self._ttheta_min.setDecimals(4)
@@ -97,7 +110,7 @@ class RietveldRefinementDialog(qt.QDialog):
         self._ttheta_max.setSuffix("°")
 
         form = qt.QFormLayout()
-        form.addRow("Wavelength λ", self._wavelength)
+        form.addRow("Wavelength λ", wavelength_widget)
         form.addRow("Minimum 2θ", self._ttheta_min)
         form.addRow("Maximum 2θ", self._ttheta_max)
 
@@ -190,7 +203,22 @@ class RietveldRefinementDialog(qt.QDialog):
             self._cifs.takeItem(self._cifs.row(item))
 
     def setWavelength(self, wavelength_A):
+        self._file_wavelength = wavelength_A
+        if wavelength_A is None:
+            self._load_wavelength.setEnabled(False)
+            self._load_wavelength.setToolTip(
+                "The diffmap integration configuration has no wavelength"
+            )
+            return
         self._wavelength.setValue(wavelength_A)
+        self._load_wavelength.setEnabled(True)
+        self._load_wavelength.setToolTip(
+            f"Restore the file wavelength ({wavelength_A:.6g} Å)"
+        )
+
+    def _restoreFileWavelength(self):
+        if self._file_wavelength is not None:
+            self._wavelength.setValue(self._file_wavelength)
 
     def wavelength(self):
         return self._wavelength.value()

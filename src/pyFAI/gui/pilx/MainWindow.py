@@ -223,8 +223,8 @@ class MainWindow(qt.QMainWindow):
         self._delta_radial_over_2 = delta_radial / 2
 
         wavelength = self.worker_config.poni.wavelength
-        if wavelength is not None:
-            self._refinement_widget.setWavelength(wavelength * 1e10)
+        wavelength_A = None if wavelength is None else wavelength * 1e10
+        self._refinement_widget.setWavelength(wavelength_A)
         self._refinement_widget.setRadialRange(
             float(radial_values[0]), float(radial_values[-1])
         )
