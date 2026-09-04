@@ -75,6 +75,43 @@ class RietveldRefinementThread(qt.QThread):
             self.error = traceback.format_exc()
 
 
+class CifListWidget(qt.QListWidget):
+    filesDropped = qt.Signal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(qt.QAbstractItemView.DragDropMode.DropOnly)
+
+    @staticmethod
+    def _cifPaths(mime_data):
+        return [
+            url.toLocalFile()
+            for url in mime_data.urls()
+            if url.isLocalFile() and url.toLocalFile().lower().endswith(".cif")
+        ]
+
+    def dragEnterEvent(self, event):
+        if self._cifPaths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._cifPaths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._cifPaths(event.mimeData())
+        if paths:
+            self.filesDropped.emit(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class RietveldRefinementDialog(qt.QDialog):
     refinementRequested = qt.Signal()
 
@@ -114,11 +151,12 @@ class RietveldRefinementDialog(qt.QDialog):
         form.addRow("Minimum 2θ", self._ttheta_min)
         form.addRow("Maximum 2θ", self._ttheta_max)
 
-        self._cifs = qt.QListWidget(self)
+        self._cifs = CifListWidget(self)
         self._cifs.setSelectionMode(
             qt.QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self._cifs.setMinimumHeight(100)
+        self._cifs.filesDropped.connect(self.addCifPaths)
         add_cifs = qt.QPushButton("Add CIFs…", self)
         add_cifs.clicked.connect(self._addCifs)
         remove_cifs = qt.QPushButton("Remove selected", self)
@@ -187,16 +225,7 @@ class RietveldRefinementDialog(qt.QDialog):
             "",
             "Crystallographic information files (*.cif);;All files (*)",
         )
-        existing = set(self.cifPaths())
-        for filename in filenames:
-            if filename not in existing:
-                item = qt.QListWidgetItem(Path(filename).name)
-                item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(qt.Qt.CheckState.Checked)
-                item.setData(qt.Qt.ItemDataRole.UserRole, filename)
-                item.setToolTip(filename)
-                self._cifs.addItem(item)
-                existing.add(filename)
+        self.addCifPaths(filenames)
 
     def _removeSelectedCifs(self):
         for item in self._cifs.selectedItems():
@@ -239,14 +268,20 @@ class RietveldRefinementDialog(qt.QDialog):
 
     def setCifPaths(self, paths):
         self._cifs.clear()
+        self.addCifPaths(paths)
+
+    def addCifPaths(self, paths):
+        existing = set(self.cifPaths())
         for path in paths:
             path = str(path)
-            item = qt.QListWidgetItem(Path(path).name)
-            item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(qt.Qt.CheckState.Checked)
-            item.setData(qt.Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(path)
-            self._cifs.addItem(item)
+            if path not in existing:
+                item = qt.QListWidgetItem(Path(path).name)
+                item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(qt.Qt.CheckState.Checked)
+                item.setData(qt.Qt.ItemDataRole.UserRole, path)
+                item.setToolTip(path)
+                self._cifs.addItem(item)
+                existing.add(path)
 
     def cifPaths(self):
         return [
