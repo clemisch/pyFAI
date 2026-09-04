@@ -183,8 +183,6 @@ class RietveldRefinementDialog(qt.QDialog):
 
         self._run_button = qt.QPushButton("Refine selected point", self)
         self._run_button.clicked.connect(self.refinementRequested)
-        self._status = qt.QLabel("Ready", self)
-        self._status.setWordWrap(True)
 
         self._parameters = qt.QTreeWidget(self)
         self._parameters.setColumnCount(3)
@@ -213,8 +211,6 @@ class RietveldRefinementDialog(qt.QDialog):
         layout.addLayout(cif_buttons)
         layout.addWidget(parameters)
         layout.addWidget(self._run_button)
-        layout.addWidget(self._status)
-        layout.addWidget(qt.QLabel("Refined parameters", self))
         layout.addWidget(self._parameters)
         layout.addWidget(raw_result_group)
 
@@ -309,9 +305,6 @@ class RietveldRefinementDialog(qt.QDialog):
         self._run_button.setText(
             "Refinement running…" if running else "Refine selected point"
         )
-
-    def setStatus(self, text):
-        self._status.setText(text)
 
     def clearResult(self):
         self._parameters.clear()

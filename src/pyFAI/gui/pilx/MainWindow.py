@@ -246,7 +246,6 @@ class MainWindow(qt.QMainWindow):
             if filename.lower().endswith(".cif")
         )
         self._refinement_widget.setCifPaths(cifs)
-        self._refinement_widget.setStatus("Ready")
 
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_label, slow_label)
         # BUG: selectMapPoint(0, 0) does not work at first render cause the picking fails
@@ -381,7 +380,6 @@ class MainWindow(qt.QMainWindow):
 
         self.clearRietveldCurves()
         self._refinement_widget.clearResult()
-        self._refinement_widget.setStatus("Ready")
         self.displayPatternAtIndices(indices, legend="INTEGRATE")
         self.displayImageAtIndices(indices)
         pixel_center_coords = self._map_plot_widget.findCenterOfNearestPixel(x, y)
@@ -662,9 +660,6 @@ class MainWindow(qt.QMainWindow):
 
         self.clearRietveldCurves()
         self._refinement_widget.setRunning(True)
-        self._refinement_widget.setStatus(
-            f"Refining point [{point.indices.row}, {point.indices.col}]…"
-        )
         self._refinement_thread = RietveldRefinementThread(
             inputs,
             point.indices,
@@ -684,15 +679,11 @@ class MainWindow(qt.QMainWindow):
         if thread.error is not None:
             logger.error("Rietveld refinement failed:\n%s", thread.error)
             message = thread.error.strip().splitlines()[-1]
-            self._refinement_widget.setStatus(f"Refinement failed: {message}")
             self.warning(f"Rietveld refinement failed: {message}")
             thread.deleteLater()
             return
 
         if thread.indices != self._unfixed_indices:
-            self._refinement_widget.setStatus(
-                "Refinement finished for a point which is no longer selected"
-            )
             thread.deleteLater()
             return
 
@@ -741,10 +732,6 @@ class MainWindow(qt.QMainWindow):
 
         self._integrated_plot_widget.setLegendsVisible(True)
         self._refinement_widget.setResult(result, thread.refinement_flags)
-        rwp = result["history"][-1]["Rw"]
-        self._refinement_widget.setStatus(
-            f"Point [{thread.indices.row}, {thread.indices.col}], Rwp {rwp:.2f}%"
-        )
         thread.deleteLater()
 
     def closeEvent(self, event):
