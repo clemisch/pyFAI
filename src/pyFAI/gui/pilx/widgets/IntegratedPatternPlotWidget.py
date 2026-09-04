@@ -35,7 +35,7 @@ __copyright__ = "European Synchrotron Radiation Facility, Grenoble, France"
 __date__ = "22/03/2024"
 __status__ = "development"
 
-from silx.gui import qt
+from silx.gui import icons, qt
 from silx.gui.plot import PlotWidget
 from silx.gui.plot.LegendSelector import LegendsDockWidget
 from silx.gui.plot.actions.control import ResetZoomAction
@@ -52,6 +52,7 @@ from .RoiRangeWidget import RoiRangeWidget
 
 
 class IntegratedPatternPlotWidget(PlotWidget):
+    refinementRequested = qt.Signal()
 
     def __init__(self, parent=None, backend=None):
         super().__init__(parent, backend)
@@ -103,6 +104,13 @@ class IntegratedPatternPlotWidget(PlotWidget):
 
         toolbar.addSeparator()
         toolbar.addAction(SaveAction(self, toolbar))
+        toolbar.addSeparator()
+        refinementAction = qt.QAction(
+            icons.getQIcon("math-fit"), "Rietveld refinement", toolbar
+        )
+        refinementAction.setToolTip("Open Rietveld refinement")
+        refinementAction.triggered.connect(self.refinementRequested)
+        toolbar.addAction(refinementAction)
         return toolbar
 
     def _initStatusBar(self):

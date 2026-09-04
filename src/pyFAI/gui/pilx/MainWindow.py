@@ -67,8 +67,8 @@ from .widgets.DiffractionImagePlotWidget import DiffractionImagePlotWidget
 from .widgets.IntegratedPatternPlotWidget import IntegratedPatternPlotWidget
 from .widgets.MapPlotWidget import MapPlotWidget
 from .widgets.RietveldRefinementWidget import (
+    RietveldRefinementDialog,
     RietveldRefinementThread,
-    RietveldRefinementWidget,
 )
 from .widgets.TitleWidget import TitleWidget
 
@@ -108,12 +108,12 @@ class MainWindow(qt.QMainWindow):
 
         self._title_widget = TitleWidget(self)
 
-        self._refinement_widget = RietveldRefinementWidget(self)
-        refinement_dock = qt.QDockWidget("Rietveld refinement", self)
-        refinement_dock.setWidget(self._refinement_widget)
-        self.addDockWidget(qt.Qt.RightDockWidgetArea, refinement_dock)
+        self._refinement_widget = RietveldRefinementDialog(self)
         self._refinement_widget.refinementRequested.connect(
             self.runRietveldRefinement
+        )
+        self._integrated_plot_widget.refinementRequested.connect(
+            self.showRietveldRefinement
         )
 
         self._central_widget = qt.QWidget()
@@ -370,6 +370,7 @@ class MainWindow(qt.QMainWindow):
             self._unfixed_indices = indices
 
         self.clearRietveldCurves()
+        self._refinement_widget.clearResult()
         self._refinement_widget.setStatus("Ready")
         self.displayPatternAtIndices(indices, legend="INTEGRATE")
         self.displayImageAtIndices(indices)
@@ -547,6 +548,11 @@ class MainWindow(qt.QMainWindow):
                 self._integrated_plot_widget.removeCurve(legend=legend)
         self._integrated_plot_widget.setLegendsVisible(False)
 
+    def showRietveldRefinement(self):
+        self._refinement_widget.show()
+        self._refinement_widget.raise_()
+        self._refinement_widget.activateWindow()
+
     def runRietveldRefinement(self):
         if self._file_name is None or self._unfixed_indices is None:
             self.warning("No map point is selected for refinement")
@@ -571,7 +577,7 @@ class MainWindow(qt.QMainWindow):
             )
             return
 
-        cifs = self._refinement_widget.cifPaths()
+        cifs = self._refinement_widget.enabledCifPaths()
         if not cifs:
             self.warning("Select at least one CIF before refinement")
             return
@@ -652,6 +658,7 @@ class MainWindow(qt.QMainWindow):
         self._refinement_thread = RietveldRefinementThread(
             inputs,
             point.indices,
+            flags,
             parent=self,
         )
         self._refinement_thread.finished.connect(
@@ -723,6 +730,7 @@ class MainWindow(qt.QMainWindow):
             )
 
         self._integrated_plot_widget.setLegendsVisible(True)
+        self._refinement_widget.setResult(result, thread.refinement_flags)
         rwp = result["history"][-1]["Rw"]
         self._refinement_widget.setStatus(
             f"Point [{thread.indices.row}, {thread.indices.col}], Rwp {rwp:.2f}%"

@@ -28,17 +28,20 @@
 from __future__ import annotations
 
 import traceback
+from math import degrees
 from pathlib import Path
+from pprint import pformat
 
 from silx.gui import qt
 
 
 class RietveldRefinementThread(qt.QThread):
 
-    def __init__(self, inputs, indices, parent=None):
+    def __init__(self, inputs, indices, refinement_flags, parent=None):
         super().__init__(parent)
         self.inputs = inputs
         self.indices = indices
+        self.refinement_flags = refinement_flags
         self.result = None
         self.error = None
 
@@ -72,11 +75,14 @@ class RietveldRefinementThread(qt.QThread):
             self.error = traceback.format_exc()
 
 
-class RietveldRefinementWidget(qt.QWidget):
+class RietveldRefinementDialog(qt.QDialog):
     refinementRequested = qt.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setWindowTitle("Rietveld refinement")
+        self.setModal(False)
+        self.resize(520, 720)
 
         self._wavelength = qt.QDoubleSpinBox(self)
         self._wavelength.setDecimals(6)
@@ -129,6 +135,26 @@ class RietveldRefinementWidget(qt.QWidget):
         self._status = qt.QLabel("Ready", self)
         self._status.setWordWrap(True)
 
+        self._parameters = qt.QTreeWidget(self)
+        self._parameters.setColumnCount(3)
+        self._parameters.setHeaderLabels(("Parameter", "Value", "σ"))
+        self._parameters.setAlternatingRowColors(True)
+        self._parameters.setMinimumHeight(180)
+
+        self._raw_result = qt.QPlainTextEdit(self)
+        self._raw_result.setReadOnly(True)
+        self._raw_result.setLineWrapMode(qt.QPlainTextEdit.NoWrap)
+        self._raw_result.setFont(
+            qt.QFontDatabase.systemFont(qt.QFontDatabase.FixedFont)
+        )
+        self._raw_result.setVisible(False)
+        raw_result_group = qt.QGroupBox("Raw result (arrays abbreviated)", self)
+        raw_result_group.setCheckable(True)
+        raw_result_group.setChecked(False)
+        raw_result_layout = qt.QVBoxLayout(raw_result_group)
+        raw_result_layout.addWidget(self._raw_result)
+        raw_result_group.toggled.connect(self._raw_result.setVisible)
+
         layout = qt.QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(qt.QLabel("Phases", self))
@@ -137,7 +163,9 @@ class RietveldRefinementWidget(qt.QWidget):
         layout.addWidget(parameters)
         layout.addWidget(self._run_button)
         layout.addWidget(self._status)
-        layout.addStretch(1)
+        layout.addWidget(qt.QLabel("Refined parameters", self))
+        layout.addWidget(self._parameters)
+        layout.addWidget(raw_result_group)
 
     def _addCifs(self):
         filenames, _ = qt.QFileDialog.getOpenFileNames(
@@ -150,6 +178,8 @@ class RietveldRefinementWidget(qt.QWidget):
         for filename in filenames:
             if filename not in existing:
                 item = qt.QListWidgetItem(Path(filename).name)
+                item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(qt.Qt.CheckState.Checked)
                 item.setData(qt.Qt.ItemDataRole.UserRole, filename)
                 item.setToolTip(filename)
                 self._cifs.addItem(item)
@@ -184,6 +214,8 @@ class RietveldRefinementWidget(qt.QWidget):
         for path in paths:
             path = str(path)
             item = qt.QListWidgetItem(Path(path).name)
+            item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(qt.Qt.CheckState.Checked)
             item.setData(qt.Qt.ItemDataRole.UserRole, path)
             item.setToolTip(path)
             self._cifs.addItem(item)
@@ -192,6 +224,13 @@ class RietveldRefinementWidget(qt.QWidget):
         return [
             self._cifs.item(index).data(qt.Qt.ItemDataRole.UserRole)
             for index in range(self._cifs.count())
+        ]
+
+    def enabledCifPaths(self):
+        return [
+            self._cifs.item(index).data(qt.Qt.ItemDataRole.UserRole)
+            for index in range(self._cifs.count())
+            if self._cifs.item(index).checkState() == qt.Qt.CheckState.Checked
         ]
 
     def refinementFlags(self):
@@ -210,3 +249,74 @@ class RietveldRefinementWidget(qt.QWidget):
 
     def setStatus(self, text):
         self._status.setText(text)
+
+    def clearResult(self):
+        self._parameters.clear()
+        self._raw_result.clear()
+
+    def setResult(self, result, flags):
+        self._parameters.clear()
+        history = result["history"][-1]
+        values = history["ref"]
+        uncertainties = history["ref_std"]
+
+        histogram = qt.QTreeWidgetItem(self._parameters, ["Histogram"])
+        qt.QTreeWidgetItem(histogram, ["Rwp [%]", f'{history["Rw"]:.7g}', ""])
+        if "Rw_net" in history:
+            qt.QTreeWidgetItem(
+                histogram,
+                ["Rwp (no bkg) [%]", f'{history["Rw_net"]:.7g}', ""],
+            )
+        if flags["displacement"]:
+            value = values["pp"]["2ThetaFlatDetDispRatio"]
+            uncertainty = uncertainties["pp"]["2ThetaFlatDetDispRatio"]
+            qt.QTreeWidgetItem(
+                histogram,
+                ["Sample displacement ratio", f"{value:.7g}", f"{uncertainty:.3g}"],
+            )
+
+        for phase, phase_values in values["phases"].items():
+            phase_item = qt.QTreeWidgetItem(self._parameters, [phase])
+            phase_uncertainties = uncertainties["phases"][phase]
+            if flags["scale"]:
+                value = values["scales"][phase]
+                uncertainty = uncertainties["scales"][phase]
+                qt.QTreeWidgetItem(
+                    phase_item,
+                    ["Scale", f"{value:.7g}", f"{uncertainty:.3g}"],
+                )
+            if flags["unit_cell"]:
+                for parameter in ("a", "b", "c"):
+                    value = phase_values[parameter]
+                    uncertainty = phase_uncertainties[parameter]
+                    qt.QTreeWidgetItem(
+                        phase_item,
+                        [
+                            f"{parameter} [Å]",
+                            f"{value:.7g}",
+                            f"{uncertainty:.3g}",
+                        ],
+                    )
+                for parameter, label in (
+                    ("alpha", "α"),
+                    ("beta", "β"),
+                    ("gamma", "γ"),
+                ):
+                    value = degrees(phase_values[parameter])
+                    uncertainty = degrees(phase_uncertainties[parameter])
+                    qt.QTreeWidgetItem(
+                        phase_item,
+                        [f"{label} [°]", f"{value:.7g}", f"{uncertainty:.3g}"],
+                    )
+            if flags["peak_width"]:
+                for parameter, label in (("W", "W [rad²]"), ("Eta0", "Eta0")):
+                    value = phase_values[parameter]
+                    uncertainty = phase_uncertainties[parameter]
+                    qt.QTreeWidgetItem(
+                        phase_item,
+                        [label, f"{value:.7g}", f"{uncertainty:.3g}"],
+                    )
+
+        self._parameters.expandAll()
+        self._parameters.resizeColumnToContents(0)
+        self._raw_result.setPlainText(pformat(result, sort_dicts=False))
