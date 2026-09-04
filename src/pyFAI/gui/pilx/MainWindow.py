@@ -242,14 +242,14 @@ class MainWindow(qt.QMainWindow):
             curve = point.get_curve()
 
         self._integrated_plot_widget.addCurve(
-            x=point._radial_curve,
+            x=point.get_radial_curve(),
             y=curve,
             legend=legend,
             selectable=False,
             resetzoom=self._integrated_plot_widget.getGraphXLimits() == (0, 100),
         )
-        self._integrated_plot_widget.setGraphXLabel(point._x_name)
-        self._integrated_plot_widget.setGraphYLabel(point._y_name)
+        self._integrated_plot_widget.setGraphXLabel(point.get_x_name())
+        self._integrated_plot_widget.setGraphYLabel(point.get_y_name())
 
     def getMask(self, image, maskfile=None):
         """returns a 2D array of boolean with invalid pixels masked,
