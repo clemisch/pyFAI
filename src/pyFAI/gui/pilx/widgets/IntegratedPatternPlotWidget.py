@@ -36,9 +36,6 @@ __date__ = "22/03/2024"
 __status__ = "development"
 
 import numpy
-from matplotlib import scale as mscale
-from matplotlib import ticker
-from matplotlib import transforms
 from silx.gui import icons, qt
 from silx.gui.plot import PlotWidget
 from silx.gui.plot.LegendSelector import LegendsDockWidget
@@ -55,53 +52,14 @@ from .RoiModeAction import RoiModeAction
 from .RoiRangeWidget import RoiRangeWidget
 
 
-class SignedSquareRootScale(mscale.ScaleBase):
-    """Square-root axis scale which preserves negative values."""
-
-    name = "signed_sqrt"
-
-    def set_default_locators_and_formatters(self, axis):
-        axis.set_major_locator(ticker.AutoLocator())
-        axis.set_major_formatter(ticker.ScalarFormatter())
-        axis.set_minor_locator(ticker.NullLocator())
-        axis.set_minor_formatter(ticker.NullFormatter())
-
-    class Transform(transforms.Transform):
-        input_dims = 1
-        output_dims = 1
-        is_separable = True
-
-        def transform_non_affine(self, values):
-            values = numpy.asarray(values)
-            return numpy.sign(values) * numpy.sqrt(numpy.abs(values))
-
-        def inverted(self):
-            return SignedSquareRootScale.InvertedTransform()
-
-    class InvertedTransform(transforms.Transform):
-        input_dims = 1
-        output_dims = 1
-        is_separable = True
-
-        def transform_non_affine(self, values):
-            values = numpy.asarray(values)
-            return numpy.sign(values) * numpy.square(values)
-
-        def inverted(self):
-            return SignedSquareRootScale.Transform()
-
-    def get_transform(self):
-        return self.Transform()
-
-
-mscale.register_scale(SignedSquareRootScale)
-
-
 class IntegratedPatternPlotWidget(PlotWidget):
     refinementRequested = qt.Signal()
     reflectionOverlayRequested = qt.Signal()
 
     def __init__(self, parent=None, backend=None):
+        self._sqrt_mode = False
+        self._curve_y_data = {}
+        self._data_y_label = ""
         super().__init__(parent, backend)
         self.setDataMargins(0.02, 0.02, 0.02, 0.02)
         self.sigPlotSignal.connect(self.onRectDraw)
@@ -136,6 +94,19 @@ class IntegratedPatternPlotWidget(PlotWidget):
 
     def setLegendsVisible(self, visible):
         self._legends.setVisible(visible)
+
+    def addDataCurve(self, x, y, legend, **kwargs):
+        y = numpy.asarray(y)
+        self._curve_y_data[legend] = numpy.array(y, copy=True)
+        if self._sqrt_mode:
+            y = numpy.sign(y) * numpy.sqrt(numpy.abs(y))
+        return self.addCurve(x, y, legend=legend, **kwargs)
+
+    def setDataYLabel(self, label):
+        self._data_y_label = label
+        if self._sqrt_mode:
+            label = f"asqrt({label})"
+        self.setGraphYLabel(label)
 
     def _initRoi(self):
         roi = HorizontalRangeROI()
@@ -284,22 +255,39 @@ class IntegratedPatternPlotWidget(PlotWidget):
         axis = self.getYAxis()
         backend = self.getBackend()
         if scale == "signed_sqrt":
-            if not hasattr(backend, "ax"):
-                raise RuntimeError(
-                    "Square-root Y-axis scaling requires the Matplotlib backend"
-                )
             if axis.getScale() != "linear":
                 axis.setScale("linear")
-            backend.setYAxisScale("signed_sqrt")
+            self._sqrt_mode = True
             icon = "math-amplitude"
-            tooltip = "Y-axis scale is signed square root"
+            tooltip = "Y data is transformed with signed square root"
         else:
+            self._sqrt_mode = False
             if axis.getScale() == scale:
                 backend.setYAxisScale(scale)
             else:
                 axis.setScale(scale)
             icon = f"yscale-{scale}"
             tooltip = f"Y-axis scale is {scale}"
+
+        for curve in self.getAllCurves():
+            y = self._curve_y_data.get(curve.getName())
+            if y is None:
+                continue
+            if self._sqrt_mode:
+                y = numpy.sign(y) * numpy.sqrt(numpy.abs(y))
+            curve.setData(
+                curve.getXData(copy=False),
+                y,
+                xerror=curve.getXErrorData(copy=False),
+                yerror=curve.getYErrorData(copy=False),
+                baseline=curve.getBaseline(copy=False),
+                copy=False,
+            )
+
+        label = self._data_y_label
+        if self._sqrt_mode:
+            label = f"asqrt({label})"
+        self.setGraphYLabel(label)
 
         self._y_scale_actions[scale].setChecked(True)
         self._y_scale_button.setIcon(icons.getQIcon(icon))

@@ -387,7 +387,7 @@ class MainWindow(qt.QMainWindow):
         else:
             curve = point.get_curve()
 
-        self._integrated_plot_widget.addCurve(
+        self._integrated_plot_widget.addDataCurve(
             x=point.get_radial_curve(),
             y=curve,
             legend=legend,
@@ -395,7 +395,7 @@ class MainWindow(qt.QMainWindow):
             resetzoom=self._integrated_plot_widget.getGraphXLimits() == (0, 100),
         )
         self._integrated_plot_widget.setGraphXLabel(point.get_x_name())
-        self._integrated_plot_widget.setGraphYLabel(point.get_y_name())
+        self._integrated_plot_widget.setDataYLabel(point.get_y_name())
 
     def getMask(self, image, maskfile=None):
         """returns a 2D array of boolean with invalid pixels masked,
@@ -886,7 +886,7 @@ class MainWindow(qt.QMainWindow):
         result = thread.result
         x = result["ttheta_deg"]
         background = result["background"]
-        self._integrated_plot_widget.addCurve(
+        self._integrated_plot_widget.addDataCurve(
             x,
             result["calculated"],
             legend="Rietveld: total",
@@ -895,7 +895,7 @@ class MainWindow(qt.QMainWindow):
             selectable=False,
             resetzoom=False,
         )
-        self._integrated_plot_widget.addCurve(
+        self._integrated_plot_widget.addDataCurve(
             x,
             background,
             legend="Rietveld: background",
@@ -916,7 +916,7 @@ class MainWindow(qt.QMainWindow):
         for index, (phase, phase_calculated) in enumerate(
             result["phase_patterns"].items()
         ):
-            self._integrated_plot_widget.addCurve(
+            self._integrated_plot_widget.addDataCurve(
                 x,
                 background + phase_calculated,
                 legend=f"Rietveld: {phase}",
