@@ -23,10 +23,11 @@
 #  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 #  THE SOFTWARE.
 
-"""Controls and asynchronous execution for single-pattern refinement."""
+"""Controls and asynchronous execution for Rietveld refinement."""
 
 from __future__ import annotations
 
+import pickle
 import traceback
 from math import degrees
 from pathlib import Path
@@ -75,6 +76,60 @@ class RietveldRefinementThread(qt.QThread):
             self.error = traceback.format_exc()
 
 
+class RietveldRefinementProcess(qt.QProcess):
+    completed = qt.Signal()
+
+    def __init__(self, python_executable, graph, refinement_flags, parent=None):
+        super().__init__(parent)
+        self.python_executable = python_executable
+        self.refinement_flags = refinement_flags
+        self.result = None
+        self.error_text = None
+        self._request = pickle.dumps(
+            {
+                "graph": graph,
+                "outputs": [{"id": "refinement", "name": "result"}],
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        self.started.connect(self._sendRequest)
+        self.finished.connect(self._readResult)
+        self.errorOccurred.connect(self._processError)
+
+    def startRefinement(self):
+        self.start(
+            self.python_executable,
+            ["-m", "ewoksxrpd.tasks.execute_subprocess"],
+        )
+
+    def _sendRequest(self):
+        self.write(self._request)
+        self.closeWriteChannel()
+        self._request = None
+
+    def _readResult(self, exit_code, exit_status):
+        if self.error_text is None:
+            stderr = bytes(self.readAllStandardError()).decode(errors="replace")
+            if exit_status != qt.QProcess.ExitStatus.NormalExit or exit_code != 0:
+                self.error_text = stderr.strip() or (
+                    f"refinement worker exited with code {exit_code}"
+                )
+            else:
+                try:
+                    outputs = pickle.loads(bytes(self.readAllStandardOutput()))
+                    self.result = outputs["result"]
+                except Exception:
+                    self.error_text = traceback.format_exc()
+                    if stderr:
+                        self.error_text += "\nWorker output:\n" + stderr
+        self.completed.emit()
+
+    def _processError(self, error):
+        if error == qt.QProcess.ProcessError.FailedToStart:
+            self.error_text = self.errorString()
+            self.completed.emit()
+
+
 class CifListWidget(qt.QListWidget):
     filesDropped = qt.Signal(list)
 
@@ -114,6 +169,8 @@ class CifListWidget(qt.QListWidget):
 
 class RietveldRefinementDialog(qt.QDialog):
     refinementRequested = qt.Signal()
+    mapRefinementRequested = qt.Signal()
+    mapRequested = qt.Signal(str, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,12 +240,18 @@ class RietveldRefinementDialog(qt.QDialog):
 
         self._run_button = qt.QPushButton("Refine selected point", self)
         self._run_button.clicked.connect(self.refinementRequested)
+        self._run_map_button = qt.QPushButton("Refine all points", self)
+        self._run_map_button.clicked.connect(self.mapRefinementRequested)
+        run_buttons = qt.QHBoxLayout()
+        run_buttons.addWidget(self._run_button)
+        run_buttons.addWidget(self._run_map_button)
 
         self._parameters = qt.QTreeWidget(self)
         self._parameters.setColumnCount(3)
         self._parameters.setHeaderLabels(("Parameter", "Value", "σ"))
         self._parameters.setAlternatingRowColors(True)
         self._parameters.setMinimumHeight(180)
+        self._parameters.itemDoubleClicked.connect(self._requestMap)
 
         self._raw_result = qt.QPlainTextEdit(self)
         self._raw_result.setReadOnly(True)
@@ -210,7 +273,7 @@ class RietveldRefinementDialog(qt.QDialog):
         layout.addWidget(self._cifs)
         layout.addLayout(cif_buttons)
         layout.addWidget(parameters)
-        layout.addWidget(self._run_button)
+        layout.addLayout(run_buttons)
         layout.addWidget(self._parameters)
         layout.addWidget(raw_result_group)
 
@@ -300,36 +363,87 @@ class RietveldRefinementDialog(qt.QDialog):
             "peak_width": self._refine_peak_width.isChecked(),
         }
 
-    def setRunning(self, running):
+    def setRunning(self, running, mapped=False):
         self._run_button.setEnabled(not running)
+        self._run_map_button.setEnabled(not running)
         self._run_button.setText(
-            "Refinement running…" if running else "Refine selected point"
+            "Refinement running…"
+            if running and not mapped
+            else "Refine selected point"
         )
+        self._run_map_button.setText(
+            "Refining all points…"
+            if running and mapped
+            else "Refine all points"
+        )
+
+    def _requestMap(self, item):
+        map_data = item.data(0, qt.Qt.ItemDataRole.UserRole)
+        if map_data is not None:
+            title = item.text(0)
+            if title.endswith("]") and " [" in title:
+                title = title.rsplit(" [", 1)[0]
+            if item.parent() is not None and item.parent().text(0) != "Histogram":
+                title = f"{item.parent().text(0)}: {title}"
+            self.mapRequested.emit(title, map_data)
 
     def clearResult(self):
         self._parameters.clear()
         self._raw_result.clear()
 
-    def setResult(self, result, flags):
+    def setResult(self, result, flags, indices=None):
         self._parameters.clear()
-        history = result["history"][-1]
+        if indices is None:
+            history = result["history"][-1]
+            map_index = None
+        else:
+            history = result["stages"][-1]
+            map_index = (indices.row, indices.col)
         values = history["ref"]
         uncertainties = history["ref_std"]
 
         histogram = qt.QTreeWidgetItem(self._parameters, ["Histogram"])
-        qt.QTreeWidgetItem(histogram, ["Rwp [%]", f'{history["Rw"]:.7g}', ""])
-        if "Rw_net" in history:
-            qt.QTreeWidgetItem(
-                histogram,
-                ["Rwp (no bkg) [%]", f'{history["Rw_net"]:.7g}', ""],
+        rwp = history["Rw"] if map_index is None else history["Rw"][map_index]
+        rwp_item = qt.QTreeWidgetItem(
+            histogram, ["Rwp [%]", f"{rwp:.7g}", ""]
+        )
+        if map_index is not None:
+            rwp_item.setData(
+                0, qt.Qt.ItemDataRole.UserRole, history["Rw"]
             )
+        if "Rw_net" in history:
+            rwp_net = (
+                history["Rw_net"]
+                if map_index is None
+                else history["Rw_net"][map_index]
+            )
+            rwp_net_item = qt.QTreeWidgetItem(
+                histogram,
+                ["Rwp (no bkg) [%]", f"{rwp_net:.7g}", ""],
+            )
+            if map_index is not None:
+                rwp_net_item.setData(
+                    0, qt.Qt.ItemDataRole.UserRole, history["Rw_net"]
+                )
         if flags["displacement"]:
             value = values["pp"]["2ThetaFlatDetDispRatio"]
             uncertainty = uncertainties["pp"]["2ThetaFlatDetDispRatio"]
-            qt.QTreeWidgetItem(
-                histogram,
-                ["Sample displacement ratio", f"{value:.7g}", f"{uncertainty:.3g}"],
+            display_value = value if map_index is None else value[map_index]
+            display_uncertainty = (
+                uncertainty
+                if map_index is None
+                else uncertainty[map_index]
             )
+            item = qt.QTreeWidgetItem(
+                histogram,
+                [
+                    "Sample displacement ratio",
+                    f"{display_value:.7g}",
+                    f"{display_uncertainty:.3g}",
+                ],
+            )
+            if map_index is not None:
+                item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
 
         for phase, phase_values in values["phases"].items():
             phase_item = qt.QTreeWidgetItem(self._parameters, [phase])
@@ -337,41 +451,89 @@ class RietveldRefinementDialog(qt.QDialog):
             if flags["scale"]:
                 value = values["scales"][phase]
                 uncertainty = uncertainties["scales"][phase]
-                qt.QTreeWidgetItem(
-                    phase_item,
-                    ["Scale", f"{value:.7g}", f"{uncertainty:.3g}"],
+                display_value = value if map_index is None else value[map_index]
+                display_uncertainty = (
+                    uncertainty
+                    if map_index is None
+                    else uncertainty[map_index]
                 )
+                item = qt.QTreeWidgetItem(
+                    phase_item,
+                    [
+                        "Scale",
+                        f"{display_value:.7g}",
+                        f"{display_uncertainty:.3g}",
+                    ],
+                )
+                if map_index is not None:
+                    item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
             if flags["unit_cell"]:
                 for parameter in ("a", "b", "c"):
                     value = phase_values[parameter]
                     uncertainty = phase_uncertainties[parameter]
-                    qt.QTreeWidgetItem(
+                    display_value = value if map_index is None else value[map_index]
+                    display_uncertainty = (
+                        uncertainty
+                        if map_index is None
+                        else uncertainty[map_index]
+                    )
+                    item = qt.QTreeWidgetItem(
                         phase_item,
                         [
                             f"{parameter} [Å]",
-                            f"{value:.7g}",
-                            f"{uncertainty:.3g}",
+                            f"{display_value:.7g}",
+                            f"{display_uncertainty:.3g}",
                         ],
                     )
+                    if map_index is not None:
+                        item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
                 for parameter, label in (
                     ("alpha", "α"),
                     ("beta", "β"),
                     ("gamma", "γ"),
                 ):
-                    value = degrees(phase_values[parameter])
-                    uncertainty = degrees(phase_uncertainties[parameter])
-                    qt.QTreeWidgetItem(
-                        phase_item,
-                        [f"{label} [°]", f"{value:.7g}", f"{uncertainty:.3g}"],
+                    value = phase_values[parameter]
+                    uncertainty = phase_uncertainties[parameter]
+                    display_value = value if map_index is None else value[map_index]
+                    display_uncertainty = (
+                        uncertainty
+                        if map_index is None
+                        else uncertainty[map_index]
                     )
+                    item = qt.QTreeWidgetItem(
+                        phase_item,
+                        [
+                            f"{label} [°]",
+                            f"{degrees(display_value):.7g}",
+                            f"{degrees(display_uncertainty):.3g}",
+                        ],
+                    )
+                    if map_index is not None:
+                        item.setData(
+                            0,
+                            qt.Qt.ItemDataRole.UserRole,
+                            value * degrees(1.0),
+                        )
             if flags["peak_width"]:
                 for parameter, label in (("W", "W [rad²]"), ("Eta0", "Eta0")):
                     value = phase_values[parameter]
                     uncertainty = phase_uncertainties[parameter]
-                    qt.QTreeWidgetItem(
-                        phase_item,
-                        [label, f"{value:.7g}", f"{uncertainty:.3g}"],
+                    display_value = value if map_index is None else value[map_index]
+                    display_uncertainty = (
+                        uncertainty
+                        if map_index is None
+                        else uncertainty[map_index]
                     )
+                    item = qt.QTreeWidgetItem(
+                        phase_item,
+                        [
+                            label,
+                            f"{display_value:.7g}",
+                            f"{display_uncertainty:.3g}",
+                        ],
+                    )
+                    if map_index is not None:
+                        item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
 
         self._parameters.expandAll()
         self._parameters.resizeColumnToContents(0)

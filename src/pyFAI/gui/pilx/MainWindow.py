@@ -39,6 +39,7 @@ import json
 import logging
 import os.path
 import posixpath
+import sys
 from string import digits
 
 import h5py
@@ -68,6 +69,7 @@ from .widgets.IntegratedPatternPlotWidget import IntegratedPatternPlotWidget
 from .widgets.MapPlotWidget import MapPlotWidget
 from .widgets.RietveldRefinementWidget import (
     RietveldRefinementDialog,
+    RietveldRefinementProcess,
     RietveldRefinementThread,
 )
 
@@ -77,13 +79,16 @@ logger = logging.getLogger(__name__)
 class MainWindow(qt.QMainWindow):
     sigFileChanged = qt.Signal(str)
 
-    def __init__(self) -> None:
+    def __init__(self, rietveld_python=None) -> None:
         super().__init__()
         self._file_name: str | None = None
         self._unfixed_indices = None
         self._fixed_indices = set()
         self._background_point = None
         self._map_plot_widgets = []
+        self._rietveld_python = rietveld_python or sys.executable
+        self._mapped_refinement_result = None
+        self._mapped_refinement_flags = None
 
         self.setWindowTitle("PyFAI-diffmap viewer")
 
@@ -110,6 +115,10 @@ class MainWindow(qt.QMainWindow):
         self._refinement_widget.refinementRequested.connect(
             self.runRietveldRefinement
         )
+        self._refinement_widget.mapRefinementRequested.connect(
+            self.runRietveldMapRefinement
+        )
+        self._refinement_widget.mapRequested.connect(self.showRietveldMap)
         self._integrated_plot_widget.refinementRequested.connect(
             self.showRietveldRefinement
         )
@@ -139,6 +148,7 @@ class MainWindow(qt.QMainWindow):
         self.setCentralWidget(self._central_widget)
 
         self._refinement_thread = None
+        self._refinement_process = None
         self.worker_config = None
 
         # declaration of instance variables
@@ -229,6 +239,10 @@ class MainWindow(qt.QMainWindow):
                  ):
 
         self._file_name = os.path.abspath(file_name)
+        self._mapped_refinement_result = None
+        self._mapped_refinement_flags = None
+        while self._map_tab_widget.count() > 1:
+            self.removeMapTab(1)
         self._dataset_paths = {}
         self._nxprocess_path = nxprocess_path
 
@@ -457,7 +471,14 @@ class MainWindow(qt.QMainWindow):
             self._unfixed_indices = indices
 
         self.clearRietveldCurves()
-        self._refinement_widget.clearResult()
+        if self._mapped_refinement_result is None:
+            self._refinement_widget.clearResult()
+        else:
+            self._refinement_widget.setResult(
+                self._mapped_refinement_result,
+                self._mapped_refinement_flags,
+                indices=indices,
+            )
         self.displayPatternAtIndices(indices, legend="INTEGRATE")
         self.displayImageAtIndices(indices)
         self.setMapMarker(
@@ -643,12 +664,10 @@ class MainWindow(qt.QMainWindow):
         self._refinement_widget.raise_()
         self._refinement_widget.activateWindow()
 
-    def runRietveldRefinement(self):
+    def _getRietveldInputs(self, mapped=False):
         if self._file_name is None or self._unfixed_indices is None:
             self.warning("No map point is selected for refinement")
-            return
-        if self._refinement_thread is not None:
-            return
+            return None
 
         point = Point(
             self._unfixed_indices,
@@ -665,17 +684,17 @@ class MainWindow(qt.QMainWindow):
             self.warning(
                 "Rietveld refinement currently requires a 2θ axis in degrees"
             )
-            return
+            return None
 
         cifs = self._refinement_widget.enabledCifPaths()
         if not cifs:
             self.warning("Select at least one CIF before refinement")
-            return
+            return None
 
         ttheta_min, ttheta_max = self._refinement_widget.radialRange()
         if ttheta_min >= ttheta_max:
             self.warning("The refinement 2θ minimum must be below the maximum")
-            return
+            return None
 
         flags = self._refinement_widget.refinementFlags()
         schedule = []
@@ -722,11 +741,9 @@ class MainWindow(qt.QMainWindow):
             )
         if not schedule:
             self.warning("Select at least one refinement parameter")
-            return
+            return None
 
         inputs = {
-            "ttheta_deg": point.get_radial_curve(),
-            "intensity": point.get_curve(),
             "cifs": cifs,
             "instprm": {
                 "lambda_A": self._refinement_widget.wavelength(),
@@ -736,9 +753,26 @@ class MainWindow(qt.QMainWindow):
             "schedule": schedule,
             "ttheta_range_deg": (ttheta_min, ttheta_max),
         }
-        intensity_error = point.get_uncertainty_curve()
-        if intensity_error is not None:
-            inputs["intensity_error"] = intensity_error
+        if mapped:
+            inputs["nxdata_url"] = (
+                f"{self._file_name}::{self._nxprocess_path}/result"
+            )
+        else:
+            inputs["ttheta_deg"] = point.get_radial_curve()
+            inputs["intensity"] = point.get_curve()
+            intensity_error = point.get_uncertainty_curve()
+            if intensity_error is not None:
+                inputs["intensity_error"] = intensity_error
+
+        return inputs, flags, point
+
+    def runRietveldRefinement(self):
+        if self._refinement_thread is not None or self._refinement_process is not None:
+            return
+        setup = self._getRietveldInputs()
+        if setup is None:
+            return
+        inputs, flags, point = setup
 
         self.clearRietveldCurves()
         self._refinement_widget.setRunning(True)
@@ -752,6 +786,44 @@ class MainWindow(qt.QMainWindow):
             self.onRietveldRefinementFinished
         )
         self._refinement_thread.start()
+
+    def runRietveldMapRefinement(self):
+        if self._refinement_thread is not None or self._refinement_process is not None:
+            return
+        setup = self._getRietveldInputs(mapped=True)
+        if setup is None:
+            return
+        inputs, flags, _point = setup
+
+        graph = {
+            "graph": {"id": "rietveld_refine_map", "schema_version": "1.2"},
+            "nodes": [
+                {
+                    "id": "refinement",
+                    "task_type": "class",
+                    "task_identifier": (
+                        "ewoksxrpd.tasks.rietveld.RietveldRefineMap"
+                    ),
+                    "default_inputs": [
+                        {"name": name, "value": value}
+                        for name, value in inputs.items()
+                    ],
+                }
+            ],
+            "links": [],
+        }
+        self.clearRietveldCurves()
+        self._refinement_widget.setRunning(True, mapped=True)
+        self._refinement_process = RietveldRefinementProcess(
+            self._rietveld_python,
+            graph,
+            flags,
+            parent=self,
+        )
+        self._refinement_process.completed.connect(
+            self.onRietveldMapRefinementFinished
+        )
+        self._refinement_process.startRefinement()
 
     def onRietveldRefinementFinished(self):
         thread = self._refinement_thread
@@ -816,9 +888,57 @@ class MainWindow(qt.QMainWindow):
         self._refinement_widget.setResult(result, thread.refinement_flags)
         thread.deleteLater()
 
+    def onRietveldMapRefinementFinished(self):
+        process = self._refinement_process
+        if process is None:
+            return
+        self._refinement_process = None
+        self._refinement_widget.setRunning(False)
+
+        if process.error_text is not None:
+            logger.error("Mapped Rietveld refinement failed:\n%s", process.error_text)
+            message = process.error_text.strip().splitlines()[-1]
+            self.warning(f"Mapped Rietveld refinement failed: {message}")
+            process.deleteLater()
+            return
+
+        for index in range(1, self._map_tab_widget.count()):
+            title = self._map_tab_widget.tabText(index)
+            if not title.endswith("*"):
+                self._map_tab_widget.setTabText(index, title + "*")
+        self._mapped_refinement_result = process.result
+        self._mapped_refinement_flags = process.refinement_flags
+        self._refinement_widget.setResult(
+            process.result,
+            process.refinement_flags,
+            indices=self._unfixed_indices,
+        )
+        self.showRietveldMap("Rwp", process.result["stages"][-1]["Rw"])
+        process.deleteLater()
+
+    def showRietveldMap(self, title, map_data):
+        for index in range(1, self._map_tab_widget.count()):
+            if self._map_tab_widget.tabText(index) == title:
+                self._map_tab_widget.setCurrentIndex(index)
+                return
+
+        axes = self._mapped_refinement_result["axes"]
+        self.addMapTab(
+            title,
+            numpy.asarray(map_data),
+            x=numpy.asarray(axes[1]["values"]),
+            y=numpy.asarray(axes[0]["values"]),
+            xlabel=axes[1]["label"],
+            ylabel=axes[0]["label"],
+        )
+
     def closeEvent(self, event):
         if self._refinement_thread is not None:
             self._refinement_thread.wait()
+        if self._refinement_process is not None:
+            process = self._refinement_process
+            process.kill()
+            process.waitForFinished()
         super().closeEvent(event)
 
     def warning(self, error_msg):

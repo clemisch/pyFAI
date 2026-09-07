@@ -90,6 +90,13 @@ def main(args=None):
                         default=None,type=str)
     parser.add_argument("--reader", help="select the default reader among `diffmap` and `bm29`",
                         default="auto", type=str)
+    parser.add_argument(
+        "--rietveld-python",
+        help=(
+            "Python executable used for one-shot mapped Rietveld refinement "
+            "(defaults to the current interpreter)"
+        ),
+    )
     version = f"pyFAI-diffmap-view version {pyFAI_version}: {pyFAI_date}"
     parser.add_argument("-V", "--version", action='version', version=version)
     parser.add_argument("-v", "--verbose", help="increase verbosity",
@@ -117,7 +124,7 @@ def main(args=None):
 
     app = qt.QApplication([])
     silx.config._MPL_TIGHT_LAYOUT = True
-    window = MainWindow()
+    window = MainWindow(rietveld_python=options.rietveld_python)
     window.initData(file_name=options.filename,
                     dataset_path=data_path,
                     nxprocess_path=nxprocess_path,
