@@ -103,6 +103,7 @@ class IntegratedPatternPlotWidget(PlotWidget):
 
     def __init__(self, parent=None, backend=None):
         super().__init__(parent, backend)
+        self.setDataMargins(0.02, 0.02, 0.02, 0.02)
         self.sigPlotSignal.connect(self.onRectDraw)
 
         self._roi_manager = RegionOfInterestManager(parent=self)
