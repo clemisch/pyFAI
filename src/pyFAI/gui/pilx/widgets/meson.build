@@ -10,6 +10,7 @@ py.install_sources(
 'RoiModeAction.py',
 'RoiRangeWidget.py',
 'RietveldRefinementWidget.py',
+'ReflectionOverlayWidget.py',
 'TitleWidget.py',
   ],
   pure: false,   # Will be installed next to binaries

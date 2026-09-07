@@ -99,6 +99,7 @@ mscale.register_scale(SignedSquareRootScale)
 
 class IntegratedPatternPlotWidget(PlotWidget):
     refinementRequested = qt.Signal()
+    reflectionOverlayRequested = qt.Signal()
 
     def __init__(self, parent=None, backend=None):
         super().__init__(parent, backend)
@@ -123,6 +124,11 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._statusBar = self._initStatusBar()
         centralWidget = self._initCentralWidget(self._statusBar)
         self.setCentralWidget(centralWidget)
+
+        self._reflection_overlays = []
+        self._reflection_items = []
+        self._updating_reflection_items = False
+        self.getYAxis().sigLimitsChanged.connect(self._updateReflectionItems)
 
     def __iter__(self):
         yield from self.getAllCurves(just_legend=True)
@@ -184,7 +190,94 @@ class IntegratedPatternPlotWidget(PlotWidget):
         refinementAction.setToolTip("Open Rietveld refinement")
         refinementAction.triggered.connect(self.refinementRequested)
         toolbar.addAction(refinementAction)
+        reflectionAction = qt.QAction(
+            icons.getQIcon("math-peak"), "Expected reflections", toolbar
+        )
+        reflectionAction.setToolTip("Display expected reflection positions")
+        reflectionAction.triggered.connect(self.reflectionOverlayRequested)
+        toolbar.addAction(reflectionAction)
         return toolbar
+
+    def setReflectionOverlays(self, overlays):
+        self._reflection_overlays = overlays
+        self._updateReflectionItems()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_reflection_overlays") and self._reflection_overlays:
+            qt.QTimer.singleShot(0, self._updateReflectionItems)
+
+    def _updateReflectionItems(self, *args):
+        if self._updating_reflection_items:
+            return
+        self._updating_reflection_items = True
+        try:
+            for legend, kind in self._reflection_items:
+                self.remove(legend, kind=kind)
+            self._reflection_items.clear()
+            if not self._reflection_overlays:
+                return
+
+            left, top, width, height = self.getPlotBoundsInPixels()
+            if width <= 0 or height <= 0:
+                return
+            bottom = top + height
+            font = qt.QFont()
+            font.setPointSize(7)
+
+            for row, overlay in enumerate(self._reflection_overlays):
+                reflections = overlay["reflections"]
+                if not reflections:
+                    continue
+                baseline_pixel = bottom - 7 - 19 * row
+                top_pixel = baseline_pixel - 8
+                baseline = self.pixelToData(left, baseline_pixel)[1]
+                tick_top = self.pixelToData(left, top_pixel)[1]
+                positions = numpy.asarray(
+                    [reflection["position"] for reflection in reflections]
+                )
+                xdata = numpy.empty(3 * len(positions))
+                ydata = numpy.empty(3 * len(positions))
+                xdata[0::3] = positions
+                xdata[1::3] = positions
+                xdata[2::3] = numpy.nan
+                ydata[0::3] = baseline
+                ydata[1::3] = tick_top
+                ydata[2::3] = numpy.nan
+                legend = f"Reflections: {overlay['name']}"
+                self.addCurve(
+                    xdata,
+                    ydata,
+                    legend=legend,
+                    color=overlay["color"],
+                    linewidth=1.0,
+                    selectable=False,
+                    resetzoom=False,
+                )
+                self._reflection_items.append((legend, "curve"))
+
+                if overlay["show_labels"]:
+                    for index, reflection in enumerate(reflections):
+                        hkls = reflection["hkls"]
+                        if not hkls:
+                            continue
+                        hkl = ",".join(str(value) for value in hkls[0])
+                        suffix = f"+{len(hkls) - 1}" if len(hkls) > 1 else ""
+                        marker_legend = f"{legend}: {index}"
+                        marker = self.addMarker(
+                            reflection["position"],
+                            tick_top,
+                            legend=marker_legend,
+                            text=f"({hkl}){suffix}",
+                            color=overlay["color"],
+                            symbol=",",
+                            selectable=False,
+                        )
+                        marker.setSymbolSize(1)
+                        marker.setFont(font)
+                        self._reflection_items.append((marker_legend, "marker"))
+        finally:
+            self._updating_reflection_items = False
 
     def setYAxisScale(self, scale):
         axis = self.getYAxis()

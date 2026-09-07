@@ -67,6 +67,7 @@ from .utils import (
 from .widgets.DiffractionImagePlotWidget import DiffractionImagePlotWidget
 from .widgets.IntegratedPatternPlotWidget import IntegratedPatternPlotWidget
 from .widgets.MapPlotWidget import MapPlotWidget
+from .widgets.ReflectionOverlayWidget import ReflectionOverlayDialog
 from .widgets.RietveldRefinementWidget import (
     RietveldRefinementDialog,
     RietveldRefinementProcess,
@@ -89,6 +90,10 @@ class MainWindow(qt.QMainWindow):
         self._rietveld_python = rietveld_python or sys.executable
         self._mapped_refinement_result = None
         self._mapped_refinement_flags = None
+        self._reflection_widget = None
+        self._reflection_wavelength = None
+        self._reflection_radial_range = None
+        self._reflection_cif_paths = []
 
         self.setWindowTitle("PyFAI-diffmap viewer")
 
@@ -121,6 +126,9 @@ class MainWindow(qt.QMainWindow):
         self._refinement_widget.mapRequested.connect(self.showRietveldMap)
         self._integrated_plot_widget.refinementRequested.connect(
             self.showRietveldRefinement
+        )
+        self._integrated_plot_widget.reflectionOverlayRequested.connect(
+            self.showReflectionOverlay
         )
 
         self._central_widget = qt.QWidget()
@@ -325,6 +333,12 @@ class MainWindow(qt.QMainWindow):
 
         wavelength = self.worker_config.poni.wavelength
         wavelength_A = None if wavelength is None else wavelength * 1e10
+        self._reflection_wavelength = wavelength_A
+        self._reflection_radial_range = (
+            float(radial_values[0]),
+            float(radial_values[-1]),
+            abs(float(delta_radial)),
+        )
         self._refinement_widget.setWavelength(wavelength_A)
         self._refinement_widget.setRadialRange(
             float(radial_values[0]), float(radial_values[-1])
@@ -335,7 +349,12 @@ class MainWindow(qt.QMainWindow):
             for filename in os.listdir(cif_directory)
             if filename.lower().endswith(".cif")
         )
+        self._reflection_cif_paths = cifs
         self._refinement_widget.setCifPaths(cifs)
+        if self._reflection_widget is not None:
+            self._reflection_widget.setWavelength(wavelength_A)
+            self._reflection_widget.setRadialRange(*self._reflection_radial_range)
+            self._reflection_widget.setCifPaths(cifs)
 
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_label, slow_label)
         # BUG: selectMapPoint(0, 0) does not work at first render cause the picking fails
@@ -663,6 +682,29 @@ class MainWindow(qt.QMainWindow):
         self._refinement_widget.show()
         self._refinement_widget.raise_()
         self._refinement_widget.activateWindow()
+
+    def showReflectionOverlay(self):
+        if self._reflection_widget is None:
+            try:
+                self._reflection_widget = ReflectionOverlayDialog(self)
+            except ImportError:
+                self.warning(
+                    "Expected reflection positions require pymatgen. "
+                    "Install it with `pip install pymatgen`."
+                )
+                return
+            self._reflection_widget.overlayChanged.connect(
+                self._integrated_plot_widget.setReflectionOverlays
+            )
+            self._reflection_widget.setWavelength(self._reflection_wavelength)
+            if self._reflection_radial_range is not None:
+                self._reflection_widget.setRadialRange(
+                    *self._reflection_radial_range
+                )
+            self._reflection_widget.setCifPaths(self._reflection_cif_paths)
+        self._reflection_widget.show()
+        self._reflection_widget.raise_()
+        self._reflection_widget.activateWindow()
 
     def _getRietveldInputs(self, mapped=False):
         if self._file_name is None or self._unfixed_indices is None:
