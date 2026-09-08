@@ -93,7 +93,7 @@ def main(args=None):
     parser.add_argument(
         "--rietveld-python",
         help=(
-            "Python executable used for one-shot mapped Rietveld refinement "
+            "Python executable used for one-shot mapped Rietveld refinement and background estimation "
             "(defaults to the current interpreter)"
         ),
     )

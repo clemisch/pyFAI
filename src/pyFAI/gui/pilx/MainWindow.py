@@ -67,6 +67,7 @@ from .utils import (
 from .widgets.DiffractionImagePlotWidget import DiffractionImagePlotWidget
 from .widgets.IntegratedPatternPlotWidget import IntegratedPatternPlotWidget
 from .widgets.MapPlotWidget import MapPlotWidget
+from .widgets.BackgroundWidget import BackgroundDialog
 from .widgets.ReflectionOverlayWidget import ReflectionOverlayDialog
 from .widgets.RietveldRefinementWidget import (
     RietveldRefinementDialog,
@@ -94,6 +95,9 @@ class MainWindow(qt.QMainWindow):
         self._reflection_wavelength = None
         self._reflection_radial_range = None
         self._reflection_cif_paths = []
+        self._background_widget = BackgroundDialog(self)
+        self._background_widget.computeRequested.connect(self.computeBackground)
+        self._background_widget.displayChanged.connect(self.refreshBackgroundDisplay)
 
         self.setWindowTitle("PyFAI-diffmap viewer")
 
@@ -130,6 +134,7 @@ class MainWindow(qt.QMainWindow):
         self._integrated_plot_widget.reflectionOverlayRequested.connect(
             self.showReflectionOverlay
         )
+        self._integrated_plot_widget.backgroundRequested.connect(self._background_widget.show)
 
         self._central_widget = qt.QWidget()
         right_splitter = qt.QSplitter(qt.Qt.Orientation.Vertical, self)
@@ -339,6 +344,7 @@ class MainWindow(qt.QMainWindow):
             float(radial_values[-1]),
             abs(float(delta_radial)),
         )
+        self._background_widget.reset(float(radial_values[0]), float(radial_values[-1]))
         self._refinement_widget.setWavelength(wavelength_A)
         self._refinement_widget.setRadialRange(
             float(radial_values[0]), float(radial_values[-1])
@@ -387,15 +393,48 @@ class MainWindow(qt.QMainWindow):
         else:
             curve = point.get_curve()
 
+        x = point.get_radial_curve()
+        baseline_result = self._background_widget.resultForPoint(indices)
+        if legend == "INTEGRATE":
+            self._integrated_plot_widget.removeCurve("Estimated background")
+        if baseline_result is not None:
+            start, stop = baseline_result["slice"]
+            baseline = baseline_result["background"]
+            if self._background_point is not None:
+                baseline = baseline - self._background_point.get_curve()[start:stop]
+            if self._background_widget.subtract.isChecked():
+                x = x[start:stop]
+                curve = curve[start:stop] - baseline
+            elif legend == "INTEGRATE":
+                self._integrated_plot_widget.addDataCurve(
+                    x[start:stop], baseline, legend="Estimated background",
+                    color="#ff7f0e", selectable=False, resetzoom=False,
+                )
+
         self._integrated_plot_widget.addDataCurve(
-            x=point.get_radial_curve(),
+            x=x,
             y=curve,
             legend=legend,
             selectable=False,
             resetzoom=self._integrated_plot_widget.getGraphXLimits() == (0, 100),
         )
         self._integrated_plot_widget.setGraphXLabel(point.get_x_name())
-        self._integrated_plot_widget.setDataYLabel(point.get_y_name())
+        label = point.get_y_name()
+        if baseline_result is not None and self._background_widget.subtract.isChecked():
+            label += " − background"
+        if legend == "INTEGRATE":
+            self._integrated_plot_widget.setDataYLabel(label)
+        if legend == "INTEGRATE" and self._background_widget.process is None:
+            dialog = self._background_widget
+            if dialog.map_result is not None:
+                message = "Mapped backgrounds available. ROI map uses the last full-map computation."
+                if indices in dialog.results:
+                    message += " Histogram uses a newer single-point preview."
+            elif baseline_result is not None:
+                message = "Selected-point background available; ROI map is uncorrected."
+            else:
+                message = "No background for this point; histogram and map are uncorrected."
+            dialog.status.setText(message)
 
     def getMask(self, image, maskfile=None):
         """returns a 2D array of boolean with invalid pixels masked,
@@ -598,6 +637,19 @@ class MainWindow(qt.QMainWindow):
                 map_data = full_map[:,:, i_min:i_max].mean(axis=2)
             else:
                 map_data = full_map[i_min:i_max, :, : ].mean(axis=0)
+            background = self._background_widget.map_result
+            corrected = False
+            if self._background_widget.subtract.isChecked() and background is not None:
+                start, stop = background["slice"]
+                if start <= i_min < i_max <= stop:
+                    map_data = map_data - background["background"][
+                        :, :, i_min - start:i_max - start
+                    ].mean(axis=2)
+                    corrected = True
+                else:
+                    self._background_widget.status.setText(
+                        "ROI is outside the computed background range; map is uncorrected."
+                    )
             fast = get_axes_dataset(nxdata, dim=axes_index.fast, default="fast")
             slow = get_axes_dataset(nxdata, dim=axes_index.slow, default="slow")
             fast_name = fast.attrs.get("long_name", "X")
@@ -605,6 +657,72 @@ class MainWindow(qt.QMainWindow):
             slow_name = slow.attrs.get("long_name", "Y")
             slow_values = slow[()]
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_name, slow_name)
+        self._map_tab_widget.setTabText(0, "2θ ROI (background subtracted)" if corrected else "2θ ROI")
+        colormap = self._map_plot_widget.getScatter("MAP").getColormap()
+        dialog = self._background_widget
+        if corrected and dialog.map_normalization is None:
+            dialog.map_normalization = colormap.getNormalization()
+            colormap.setNormalization("linear")
+        elif not corrected and dialog.map_normalization is not None:
+            colormap.setNormalization(dialog.map_normalization)
+            dialog.map_normalization = None
+
+    def computeBackground(self, mapped):
+        dialog = self._background_widget
+        if self._file_name is None or self._unfixed_indices is None or dialog.process is not None:
+            return
+        point = Point(self._unfixed_indices, f"{self._file_name}?{self._nxprocess_path}/result")
+        unit = point.get_x_unit()
+        if isinstance(unit, bytes):
+            unit = unit.decode()
+        if unit is not None and unit.lower() not in {"2th_deg", "2theta_deg", "deg", "degree", "degrees", "°"}:
+            dialog.status.setText("Background controls currently require a 2θ grid in degrees.")
+            return
+        if mapped:
+            with h5py.File(self._file_name, "r") as handle:
+                nxdata = handle[self._nxprocess_path + "/result"]
+                signal = get_signal_dataset(nxdata, default="intensity")
+                radial = get_radial_dataset(nxdata, size=self.worker_config.nbpt_rad)
+                axes = get_axes_index(signal)
+                inputs = {
+                    "filename": self._file_name, "intensity_path": signal.name,
+                    "ttheta_path": radial.name,
+                    "dimensions": (axes.slow, axes.fast, axes.radial),
+                }
+        else:
+            inputs = {"ttheta_deg": point.get_radial_curve(), "observed": point.get_curve()}
+        dialog.start(self._rietveld_python, inputs, mapped, self._unfixed_indices, self._file_name)
+        dialog.process.completed.connect(self.backgroundFinished)
+        dialog.process.startRefinement()
+
+    def backgroundFinished(self):
+        dialog = self._background_widget
+        process = dialog.process
+        dialog.process = None
+        dialog.single.setEnabled(True)
+        dialog.mapped.setEnabled(True)
+        if process.error_text:
+            dialog.status.setText(process.error_text.strip().splitlines()[-1])
+            dialog.status.setToolTip(process.error_text)
+        elif (process.background_filename == self._file_name
+              and process.background_generation == dialog.data_generation):
+            if process.background_mapped:
+                dialog.map_result = process.result
+                dialog.results.clear()
+            else:
+                # A single preview supersedes only this point, not the map.
+                dialog.results[process.background_indices] = process.result
+            self.refreshBackgroundDisplay()
+        process.deleteLater()
+
+    def refreshBackgroundDisplay(self):
+        if self._file_name is None or self._unfixed_indices is None:
+            return
+        self.clearRietveldCurves()
+        self.displayPatternAtIndices(self._unfixed_indices, legend="INTEGRATE")
+        for indices in self._fixed_indices:
+            self.displayPatternAtIndices(indices, legend=f"INTEGRATE_{indices.row}_{indices.col}")
+        self.onRoiEdition()
 
     def onMouseClickOnImage(self, x: float, y: float):
         indices = self._image_plot_widget.getImageIndices(x, y)
@@ -884,6 +1002,12 @@ class MainWindow(qt.QMainWindow):
             return
 
         result = thread.result
+        # Refinement uses raw observations. Do not overlay its raw curves on a
+        # background-subtracted preview; parameter results remain available.
+        if self._background_widget.subtract.isChecked():
+            self._refinement_widget.setResult(result, thread.refinement_flags)
+            thread.deleteLater()
+            return
         x = result["ttheta_deg"]
         background = result["background"]
         self._integrated_plot_widget.addDataCurve(
@@ -975,6 +1099,9 @@ class MainWindow(qt.QMainWindow):
         )
 
     def closeEvent(self, event):
+        if self._background_widget.process is not None:
+            self._background_widget.process.kill()
+            self._background_widget.process.waitForFinished()
         if self._refinement_thread is not None:
             self._refinement_thread.wait()
         if self._refinement_process is not None:

@@ -55,6 +55,7 @@ from .RoiRangeWidget import RoiRangeWidget
 class IntegratedPatternPlotWidget(PlotWidget):
     refinementRequested = qt.Signal()
     reflectionOverlayRequested = qt.Signal()
+    backgroundRequested = qt.Signal()
 
     def __init__(self, parent=None, backend=None):
         self._sqrt_mode = False
@@ -156,18 +157,24 @@ class IntegratedPatternPlotWidget(PlotWidget):
         toolbar.addSeparator()
         toolbar.addAction(SaveAction(self, toolbar))
         toolbar.addSeparator()
-        refinementAction = qt.QAction(
-            icons.getQIcon("math-fit"), "Rietveld refinement", toolbar
+        backgroundAction = qt.QAction(
+            icons.getQIcon("math-substract"), "Background", toolbar
         )
-        refinementAction.setToolTip("Open Rietveld refinement")
-        refinementAction.triggered.connect(self.refinementRequested)
-        toolbar.addAction(refinementAction)
+        backgroundAction.setToolTip("Estimate or subtract histogram background")
+        backgroundAction.triggered.connect(self.backgroundRequested)
+        toolbar.addAction(backgroundAction)
         reflectionAction = qt.QAction(
             icons.getQIcon("math-peak"), "Expected reflections", toolbar
         )
         reflectionAction.setToolTip("Display expected reflection positions")
         reflectionAction.triggered.connect(self.reflectionOverlayRequested)
         toolbar.addAction(reflectionAction)
+        refinementAction = qt.QAction(
+            icons.getQIcon("math-fit"), "Rietveld refinement", toolbar
+        )
+        refinementAction.setToolTip("Open Rietveld refinement")
+        refinementAction.triggered.connect(self.refinementRequested)
+        toolbar.addAction(refinementAction)
         return toolbar
 
     def setReflectionOverlays(self, overlays):

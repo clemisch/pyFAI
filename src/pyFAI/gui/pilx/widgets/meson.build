@@ -2,6 +2,7 @@ py.install_sources(
  ['__init__.py',
 'DiffractionImagePlotWidget.py',
 'ImagePlotWidget.py',
+'BackgroundWidget.py',
 'IntegratedPatternPlotWidget.py',
 'MapPlotWidget.py',
 'OpenAxisDatasetAction.py',
