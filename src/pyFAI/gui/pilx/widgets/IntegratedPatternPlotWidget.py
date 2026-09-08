@@ -127,6 +127,18 @@ class IntegratedPatternPlotWidget(PlotWidget):
                 [], [], color=curve.getColor(), linestyle=curve.getLineStyle(),
                 label=label,
             ))
+        for overlay in self._reflection_overlays:
+            if not overlay["reflections"] or not (
+                overlay["show_ticks"] or overlay["show_lines"]
+            ):
+                continue
+            handles.append(Line2D(
+                [], [], color=overlay["color"],
+                linestyle="-" if overlay["show_lines"] else "none",
+                marker="|" if overlay["show_ticks"] else None,
+                markersize=8,
+                label=f"Reflections: {overlay['name']}",
+            ))
         previous = backend.ax.get_legend()
         if previous is not None:
             previous.remove()
@@ -254,26 +266,21 @@ class IntegratedPatternPlotWidget(PlotWidget):
                 positions = numpy.asarray(
                     [reflection["position"] for reflection in reflections]
                 )
-                xdata = numpy.empty(3 * len(positions))
-                ydata = numpy.empty(3 * len(positions))
-                xdata[0::3] = positions
-                xdata[1::3] = positions
-                xdata[2::3] = numpy.nan
-                ydata[0::3] = baseline
-                ydata[1::3] = tick_top
-                ydata[2::3] = numpy.nan
                 legend = f"Reflections: {overlay['name']}"
                 if overlay["show_ticks"]:
-                    self.addCurve(
-                        xdata,
-                        ydata,
-                        legend=legend,
-                        color=overlay["color"],
-                        linewidth=1.0,
-                        selectable=False,
-                        resetzoom=False,
-                    )
-                    self._reflection_items.append((legend, "curve"))
+                    tick_y = 0.5 * (baseline + tick_top)
+                    for index, position in enumerate(positions):
+                        marker_legend = f"{legend}: tick {index}"
+                        marker = self.addMarker(
+                            position,
+                            tick_y,
+                            legend=marker_legend,
+                            color=overlay["color"],
+                            symbol="|",
+                            selectable=False,
+                        )
+                        marker.setSymbolSize(8)
+                        self._reflection_items.append((marker_legend, "marker"))
 
                 if overlay["show_lines"]:
                     color = qt.QColor(overlay["color"])
