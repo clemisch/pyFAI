@@ -4,6 +4,7 @@ import numpy
 from silx.gui import qt
 
 from .RietveldRefinementWidget import RietveldRefinementProcess
+from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
 
 
 class BackgroundDialog(qt.QDialog):
@@ -18,7 +19,7 @@ class BackgroundDialog(qt.QDialog):
         self.automatic = qt.QPushButton("Auto", self)
         self.automatic.setCheckable(True)
         self.automatic.setChecked(True)
-        self.smoothness = qt.QDoubleSpinBox(self)
+        self.smoothness = ModifierDoubleSpinBox(self)
         self.smoothness.setRange(0, 20)
         self.smoothness.setSingleStep(0.1)
         self.smoothness.setValue(6)

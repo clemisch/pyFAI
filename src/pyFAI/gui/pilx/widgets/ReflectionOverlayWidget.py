@@ -32,6 +32,8 @@ from pathlib import Path
 import numpy
 from silx.gui import qt
 
+from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
+
 
 class ReflectionPhaseList(qt.QTreeWidget):
     filesDropped = qt.Signal(list)
@@ -112,7 +114,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._update_timer.setInterval(120)
         self._update_timer.timeout.connect(self._updateReflections)
 
-        self._wavelength = qt.QDoubleSpinBox(self)
+        self._wavelength = ModifierDoubleSpinBox(self)
         self._wavelength.setDecimals(6)
         self._wavelength.setRange(0.000001, 100.0)
         self._wavelength.valueChanged.connect(self._invalidateAllPhases)
@@ -173,7 +175,7 @@ class ReflectionOverlayDialog(qt.QDialog):
 
         self._cell_edits = {}
         for parameter in ("a", "b", "c", "alpha", "beta", "gamma"):
-            edit = qt.QDoubleSpinBox(self)
+            edit = ModifierDoubleSpinBox(self)
             edit.setDecimals(6)
             if parameter in ("a", "b", "c"):
                 edit.setRange(0.000001, 10000.0)
@@ -204,7 +206,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._condense = qt.QCheckBox("Condense nearby reflections", self)
         self._condense.setChecked(True)
         self._condense.toggled.connect(self._visualizationChanged)
-        self._merge_tolerance = qt.QDoubleSpinBox(self)
+        self._merge_tolerance = ModifierDoubleSpinBox(self)
         self._merge_tolerance.setDecimals(5)
         self._merge_tolerance.setRange(0.0, 10.0)
         self._merge_tolerance.setValue(0.01)

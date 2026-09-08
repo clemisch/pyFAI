@@ -34,6 +34,8 @@ from pathlib import Path
 
 from silx.gui import qt
 
+from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
+
 
 class PhaseColors(qt.QObject):
     changed = qt.Signal()
@@ -197,7 +199,7 @@ class RietveldRefinementDialog(qt.QDialog):
         self.setModal(False)
         self.resize(520, 720)
 
-        self._wavelength = qt.QDoubleSpinBox(self)
+        self._wavelength = ModifierDoubleSpinBox(self)
         self._wavelength.setDecimals(6)
         self._wavelength.setRange(0.000001, 100.0)
         self._wavelength_lock = qt.QPushButton("Lock", self)
