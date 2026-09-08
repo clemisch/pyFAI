@@ -196,7 +196,7 @@ class ReflectionOverlayDialog(qt.QDialog):
             ("gamma", "γ [deg]"),
         ):
             phase_form.addRow(label, self._cell_edits[parameter])
-        phase_details = qt.QGroupBox("Selected phase", self)
+        phase_details = qt.QWidget(self)
         phase_details.setLayout(phase_form)
 
         self._show_labels = qt.QCheckBox("Show hkl labels", self)
@@ -222,7 +222,6 @@ class ReflectionOverlayDialog(qt.QDialog):
 
         layout = qt.QVBoxLayout(self)
         layout.addLayout(general_form)
-        layout.addWidget(qt.QLabel("Phases", self))
         layout.addWidget(self._phase_list, 1)
         layout.addLayout(phase_buttons)
         layout.addWidget(phase_details)
@@ -267,8 +266,10 @@ class ReflectionOverlayDialog(qt.QDialog):
             return
         phase = self._phases[self._phase_list.indexOfTopLevelItem(item)]
         menu = qt.QMenu(self)
-        action = menu.addAction("Choose color…")
-        if menu.exec(self._phase_list.viewport().mapToGlobal(position)) == action:
+        color_action = menu.addAction("Choose color…")
+        reset_action = menu.addAction("Reset") if phase["path"] is not None else None
+        selected = menu.exec(self._phase_list.viewport().mapToGlobal(position))
+        if selected == color_action:
             color = qt.QColorDialog.getColor(qt.QColor(phase["color"]), self)
             if color.isValid():
                 phase["color"] = color.name()
@@ -276,6 +277,20 @@ class ReflectionOverlayDialog(qt.QDialog):
                     self.phase_colors.set(phase["path"], color.name())
                 else:
                     self.refreshPhaseColors()
+        elif reset_action is not None and selected == reset_action:
+            self._resetPhase(phase, item)
+
+    def _resetPhase(self, phase, item):
+        phase.update(phase["cif_state"])
+        phase["space_group"] = None
+        phase["dirty"] = True
+        self._currentPhaseChanged(item, item)
+        self._updateModifiedState(phase, item)
+        item.setText(2, self._spaceGroupText(phase))
+        if phase["visible"]:
+            self._scheduleUpdate()
+        else:
+            self._emitOverlay()
 
     def setCifPaths(self, paths):
         self._phases.clear()
@@ -330,6 +345,14 @@ class ReflectionOverlayDialog(qt.QDialog):
                 "reflections": [],
                 "labels_computed": False,
                 "dirty": True,
+            }
+            phase["cif_state"] = {
+                key: phase[key]
+                for key in (
+                    "name", "space_group_number", "space_group_symbol",
+                    "crystal_system", "cell_mode", "a", "b", "c",
+                    "alpha", "beta", "gamma",
+                )
             }
             self._appendPhase(phase)
             existing.add(path)
@@ -438,7 +461,6 @@ class ReflectionOverlayDialog(qt.QDialog):
             )
             index = self._space_group.findData(phase["space_group_number"])
             self._space_group.setCurrentIndex(index)
-            self._space_group.setEnabled(phase["source"] == "Manual")
             for parameter, edit in self._cell_edits.items():
                 edit.setValue(phase[parameter])
             self._applyCellConstraints(phase)
@@ -463,9 +485,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         name = self._name.text().strip()
         if name:
             phase["name"] = name
-            self._updating_controls = True
-            item.setText(0, name)
-            self._updating_controls = False
+            self._updateModifiedState(phase, item)
             self._emitOverlay()
         else:
             self._name.setText(phase["name"])
@@ -484,6 +504,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase["space_group_symbol"] = group.symbol
         phase["space_group"] = group
         phase["crystal_system"] = group.crystal_system
+        phase["cell_mode"] = "conventional"
         phase["dirty"] = True
         self._updating_controls = True
         item.setText(2, self._spaceGroupText(phase))
@@ -539,7 +560,25 @@ class ReflectionOverlayDialog(qt.QDialog):
         for parameter, edit in self._cell_edits.items():
             edit.setValue(values[parameter])
         self._updating_controls = False
+        self._updateModifiedState(phase, item)
         self._scheduleUpdate()
+
+    def _updateModifiedState(self, phase, item):
+        modified = False
+        original = phase.get("cif_state")
+        if original is not None:
+            for key, value in original.items():
+                current = phase[key]
+                if isinstance(value, float):
+                    different = not numpy.isclose(current, value, rtol=1e-7, atol=5e-7)
+                else:
+                    different = current != value
+                if different:
+                    modified = True
+                    break
+        self._updating_controls = True
+        item.setText(0, phase["name"] + ("*" if modified else ""))
+        self._updating_controls = False
 
     def _scheduleUpdate(self):
         self._update_timer.start()
