@@ -344,7 +344,7 @@ class MainWindow(qt.QMainWindow):
             float(radial_values[-1]),
             abs(float(delta_radial)),
         )
-        self._background_widget.reset(float(radial_values[0]), float(radial_values[-1]))
+        self._background_widget.reset(radial_values)
         self._refinement_widget.setWavelength(wavelength_A)
         self._refinement_widget.setRadialRange(
             float(radial_values[0]), float(radial_values[-1])
@@ -631,6 +631,12 @@ class MainWindow(qt.QMainWindow):
             nxdata = nxprocess["result"]
             radial = get_radial_dataset(nxdata, size=self.worker_config.nbpt_rad)[()]
             i_min, i_max = get_indices_from_values(v_min, v_max, radial)
+            i_min = max(0, i_min)
+            i_max = min(len(radial), i_max)
+            # An unset or sub-bin ROI can select no samples. Keep the current
+            # map rather than replacing it with the mean of an empty slice.
+            if i_min >= i_max:
+                return
             full_map = get_signal_dataset(nxdata, default="intensity")
             axes_index = get_axes_index(full_map)
             if axes_index.radial == 2:
@@ -677,6 +683,7 @@ class MainWindow(qt.QMainWindow):
             unit = unit.decode()
         if unit is not None and unit.lower() not in {"2th_deg", "2theta_deg", "deg", "degree", "degrees", "°"}:
             dialog.status.setText("Background controls currently require a 2θ grid in degrees.")
+            self.warning(dialog.status.text())
             return
         if mapped:
             with h5py.File(self._file_name, "r") as handle:
@@ -704,6 +711,7 @@ class MainWindow(qt.QMainWindow):
         if process.error_text:
             dialog.status.setText(process.error_text.strip().splitlines()[-1])
             dialog.status.setToolTip(process.error_text)
+            self.warning(dialog.status.text())
         elif (process.background_filename == self._file_name
               and process.background_generation == dialog.data_generation):
             if process.background_mapped:
@@ -722,7 +730,8 @@ class MainWindow(qt.QMainWindow):
         self.displayPatternAtIndices(self._unfixed_indices, legend="INTEGRATE")
         for indices in self._fixed_indices:
             self.displayPatternAtIndices(indices, legend=f"INTEGRATE_{indices.row}_{indices.col}")
-        self.onRoiEdition()
+        if self._background_widget.map_result is not None:
+            self.onRoiEdition()
 
     def onMouseClickOnImage(self, x: float, y: float):
         indices = self._image_plot_widget.getImageIndices(x, y)

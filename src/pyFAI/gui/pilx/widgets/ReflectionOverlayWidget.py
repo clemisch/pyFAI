@@ -131,7 +131,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         wavelength_widget.setLayout(wavelength_layout)
 
         general_form = qt.QFormLayout()
-        general_form.addRow("Wavelength λ [Å]", wavelength_widget)
+        general_form.addRow("Wavelength [Å]", wavelength_widget)
 
         self._phase_list = ReflectionPhaseList(self)
         self._phase_list.setColumnCount(3)

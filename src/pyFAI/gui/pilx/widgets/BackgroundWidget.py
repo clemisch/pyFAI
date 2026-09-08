@@ -1,5 +1,6 @@
 """Optional background estimation controls, executed in the external Ewoks worker."""
 
+import numpy
 from silx.gui import qt
 
 from .RietveldRefinementWidget import RietveldRefinementProcess
@@ -11,13 +12,15 @@ class BackgroundDialog(qt.QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.radial_values = None
         self.setWindowTitle("Histogram background")
         self.minimum = qt.QDoubleSpinBox(self)
         self.maximum = qt.QDoubleSpinBox(self)
         for edit in (self.minimum, self.maximum):
             edit.setDecimals(6)
             edit.setRange(0, 180)
-        self.automatic = qt.QCheckBox("Automatic smoothness", self)
+        self.automatic = qt.QPushButton("Auto", self)
+        self.automatic.setCheckable(True)
         self.automatic.setChecked(True)
         self.smoothness = qt.QDoubleSpinBox(self)
         self.smoothness.setRange(0, 20)
@@ -25,39 +28,70 @@ class BackgroundDialog(qt.QDialog):
         self.smoothness.setValue(6)
         self.smoothness.setEnabled(False)
         self.automatic.toggled.connect(self.smoothness.setDisabled)
-        self.subtract = qt.QCheckBox("Subtract background", self)
+        self.automatic.toggled.connect(self.updateAutomaticSmoothness)
+        self.minimum.valueChanged.connect(self.updateAutomaticSmoothness)
+        self.maximum.valueChanged.connect(self.updateAutomaticSmoothness)
+        self.overlay = qt.QRadioButton("Overlay background", self)
+        self.subtract = qt.QRadioButton("Substract background", self)
+        self.overlay.setChecked(True)
         self.subtract.toggled.connect(self.displayChanged)
-        self.single = qt.QPushButton("Compute background", self)
+        self.single = qt.QPushButton("Compute histogram background", self)
         self.mapped = qt.QPushButton("Compute all backgrounds", self)
         self.single.clicked.connect(lambda: self.computeRequested.emit(False))
         self.mapped.clicked.connect(lambda: self.computeRequested.emit(True))
         self.status = qt.QLabel("No backgrounds computed", self)
         self.status.setWordWrap(True)
+        self.status.hide()
         form = qt.QFormLayout(self)
-        form.addRow("Minimum 2θ [deg]", self.minimum)
-        form.addRow("Maximum 2θ [deg]", self.maximum)
-        form.addRow(self.automatic)
-        form.addRow("Smoothness [log10 λ]", self.smoothness)
-        form.addRow(self.single, self.mapped)
+        form.setVerticalSpacing(12)
+        bounds = qt.QHBoxLayout()
+        bounds.addWidget(self.minimum)
+        bounds.addWidget(self.maximum)
+        form.addRow("Min/Max 2θ [deg]", bounds)
+        smoothness = qt.QHBoxLayout()
+        smoothness.addWidget(self.automatic)
+        smoothness.addWidget(self.smoothness)
+        form.addRow("Smoothness", smoothness)
+        for button in (self.single, self.mapped, self.overlay):
+            separator = qt.QFrame(self)
+            separator.setFrameShape(qt.QFrame.Shape.HLine)
+            separator.setFrameShadow(qt.QFrame.Shadow.Sunken)
+            form.addRow(separator)
+            form.addRow(button)
         form.addRow(self.subtract)
-        form.addRow(self.status)
+        self.resize(self.sizeHint().width() + 30, self.sizeHint().height() + 30)
         self.process = None
         self.results = {}
         self.map_result = None
         self.map_normalization = None
         self.data_generation = 0
 
-    def reset(self, minimum, maximum):
+    def reset(self, radial_values):
         self.data_generation += 1
+        self.radial_values = numpy.asarray(radial_values)
+        minimum, maximum = float(radial_values[0]), float(radial_values[-1])
         self.radial_bounds = (minimum, maximum)
         self.minimum.setValue(minimum)
         self.maximum.setValue(maximum)
         self.results.clear()
         self.map_result = None
         self.subtract.blockSignals(True)
-        self.subtract.setChecked(False)
+        self.overlay.setChecked(True)
         self.subtract.blockSignals(False)
         self.status.setText("No backgrounds computed")
+        self.updateAutomaticSmoothness()
+
+    def updateAutomaticSmoothness(self):
+        if not self.automatic.isChecked() or self.radial_values is None:
+            return
+        lower, upper = self.selectedRange()
+        start, stop = numpy.searchsorted(self.radial_values, (lower, upper))
+
+        if stop - start >= 3:
+            # Match xrdmap.background._auto_smoothness without importing the
+            # refinement environment into the GUI process.
+            value = min(10, (int(10 * numpy.log10(stop - start)**1.5) - 9.5) / 10.)
+            self.smoothness.setValue(value)
 
     def resultForPoint(self, indices):
         if indices in self.results:
@@ -68,15 +102,18 @@ class BackgroundDialog(qt.QDialog):
             return result
         return self.results.get(indices)
 
-    def start(self, python, inputs, mapped, indices, filename):
+    def selectedRange(self):
         lower, upper = self.minimum.value(), self.maximum.value()
         # Preserve endpoint samples despite spin-box display rounding.
         if abs(lower - self.radial_bounds[0]) < 1e-6:
             lower = self.radial_bounds[0]
         if abs(upper - self.radial_bounds[1]) < 1e-6:
             upper = self.radial_bounds[1]
+        return lower, upper
+
+    def start(self, python, inputs, mapped, indices, filename):
         inputs.update(
-            ttheta_range_deg=(lower, upper),
+            ttheta_range_deg=self.selectedRange(),
             smoothness=None if self.automatic.isChecked() else self.smoothness.value(),
         )
         task = "EstimateBackgroundMap" if mapped else "EstimateBackgroundSingle"
