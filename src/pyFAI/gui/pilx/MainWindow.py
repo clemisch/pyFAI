@@ -122,9 +122,16 @@ class MainWindow(qt.QMainWindow):
 
         self._refinement_widget = RietveldRefinementDialog(self)
         self._rietveld_phase_paths = {}
+        self._point_refinements = {}
+        self._preview_generation = 0
+        self._preview_timer = qt.QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(180)
+        self._preview_timer.timeout.connect(self.runRietveldRefinement)
         self._refinement_widget.phase_colors.changed.connect(self.refreshRietveldColors)
+        self._refinement_widget.displayChanged.connect(self.refreshRietveldVisibility)
         self._refinement_widget.refinementRequested.connect(
-            self.runRietveldRefinement
+            self.scheduleRietveldRefinement
         )
         self._refinement_widget.mapRefinementRequested.connect(
             self.runRietveldMapRefinement
@@ -347,6 +354,7 @@ class MainWindow(qt.QMainWindow):
             abs(float(delta_radial)),
         )
         self._background_widget.reset(radial_values)
+        self._point_refinements.clear()
         self._refinement_widget.setWavelength(wavelength_A)
         self._refinement_widget.setRadialRange(
             float(radial_values[0]), float(radial_values[-1])
@@ -540,6 +548,8 @@ class MainWindow(qt.QMainWindow):
                 indices=indices,
             )
         self.displayPatternAtIndices(indices, legend="INTEGRATE")
+        self.displayAvailableRefinement()
+        self.scheduleRietveldRefinement()
         self.displayImageAtIndices(indices)
         self.setMapMarker(
             indices,
@@ -665,7 +675,7 @@ class MainWindow(qt.QMainWindow):
             slow_name = slow.attrs.get("long_name", "Y")
             slow_values = slow[()]
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_name, slow_name)
-        self._map_tab_widget.setTabText(0, "2θ ROI (background subtracted)" if corrected else "2θ ROI")
+        self._map_tab_widget.setTabText(0, "2θ ROI (no bkg)" if corrected else "2θ ROI")
         colormap = self._map_plot_widget.getScatter("MAP").getColormap()
         dialog = self._background_widget
         if corrected and dialog.map_normalization is None:
@@ -734,6 +744,7 @@ class MainWindow(qt.QMainWindow):
             self.displayPatternAtIndices(indices, legend=f"INTEGRATE_{indices.row}_{indices.col}")
         if self._background_widget.map_result is not None:
             self.onRoiEdition()
+        self.displayAvailableRefinement()
 
     def onMouseClickOnImage(self, x: float, y: float):
         indices = self._image_plot_widget.getImageIndices(x, y)
@@ -805,13 +816,28 @@ class MainWindow(qt.QMainWindow):
         for legend in list(self._integrated_plot_widget):
             if legend.startswith("Rietveld:"):
                 self._integrated_plot_widget.removeCurve(legend=legend)
-        self._integrated_plot_widget.setLegendsVisible(False)
 
     def refreshRietveldColors(self):
         for phase, path in self._rietveld_phase_paths.items():
             curve = self._integrated_plot_widget.getCurve(f"Rietveld: {phase}")
             if curve is not None:
                 curve.setColor(self._refinement_widget.phase_colors.get(path))
+        self._integrated_plot_widget.scheduleLegendUpdate()
+
+    def refreshRietveldVisibility(self):
+        dialog = self._refinement_widget
+        shown = dialog.shownCifPaths()
+        visibility = {
+            "Rietveld: total": dialog.show_total.isChecked(),
+            "Rietveld: background": dialog.show_background.isChecked(),
+        }
+        for phase, path in self._rietveld_phase_paths.items():
+            visibility[f"Rietveld: {phase}"] = os.path.realpath(path) in shown
+        for legend, visible in visibility.items():
+            curve = self._integrated_plot_widget.getCurve(legend)
+            if curve is not None:
+                curve.setVisible(visible)
+        self._integrated_plot_widget.scheduleLegendUpdate()
 
     def showRietveldRefinement(self):
         self._refinement_widget.show()
@@ -945,7 +971,17 @@ class MainWindow(qt.QMainWindow):
 
         return inputs, flags, point
 
+    def scheduleRietveldRefinement(self):
+        self._preview_generation += 1
+        self._preview_timer.stop()
+        self._point_refinements.clear()
+        if self._refinement_widget._run_button.isChecked():
+            self.clearRietveldCurves()
+            self._preview_timer.start()
+
     def runRietveldRefinement(self):
+        if not self._refinement_widget._run_button.isChecked() or self._file_name is None:
+            return
         if self._refinement_thread is not None or self._refinement_process is not None:
             return
         setup = self._getRietveldInputs()
@@ -964,6 +1000,8 @@ class MainWindow(qt.QMainWindow):
         self._rietveld_phase_paths = {
             os.path.splitext(os.path.basename(path))[0]: path for path in inputs["cifs"]
         }
+        self._refinement_thread.phase_paths = dict(self._rietveld_phase_paths)
+        self._refinement_thread.preview_generation = self._preview_generation
         self._refinement_thread.finished.connect(
             self.onRietveldRefinementFinished
         )
@@ -1012,6 +1050,12 @@ class MainWindow(qt.QMainWindow):
         self._refinement_thread = None
         self._refinement_widget.setRunning(False)
 
+        if thread.preview_generation != self._preview_generation:
+            thread.deleteLater()
+            if self._refinement_widget._run_button.isChecked():
+                self._preview_timer.start()
+            return
+
         if thread.error is not None:
             logger.error("Rietveld refinement failed:\n%s", thread.error)
             message = thread.error.strip().splitlines()[-1]
@@ -1019,22 +1063,33 @@ class MainWindow(qt.QMainWindow):
             thread.deleteLater()
             return
 
-        if thread.indices != self._unfixed_indices:
-            thread.deleteLater()
-            return
-
         result = thread.result
-        # Refinement uses raw observations. Do not overlay its raw curves on a
-        # background-subtracted preview; parameter results remain available.
-        if self._background_widget.subtract.isChecked():
-            self._refinement_widget.setResult(result, thread.refinement_flags)
-            thread.deleteLater()
+        paths = thread.phase_paths
+        self._point_refinements[thread.indices] = (result, thread.refinement_flags, paths)
+        thread.deleteLater()
+        self.displayAvailableRefinement()
+
+    def displayAvailableRefinement(self):
+        self.clearRietveldCurves()
+        cached = self._point_refinements.get(self._unfixed_indices)
+        if cached is not None:
+            result, flags, self._rietveld_phase_paths = cached
+            self._refinement_widget.setResult(result, flags)
+        else:
             return
         x = result["ttheta_deg"]
-        background = result["background"]
+        selected = numpy.ones(len(x), dtype=bool)
+        baseline = 0
+        preview = self._background_widget.resultForPoint(self._unfixed_indices)
+        if self._background_widget.subtract.isChecked() and preview is not None:
+            grid = preview["ttheta_deg"]
+            selected = (x >= grid[0]) & (x <= grid[-1])
+            baseline = numpy.interp(x[selected], grid, preview["background"])
+        x = x[selected]
+        background = result["background"][selected] - baseline
         self._integrated_plot_widget.addDataCurve(
             x,
-            result["calculated"],
+            result["calculated"][selected] - baseline,
             legend="Rietveld: total",
             color="#d62728",
             linewidth=1.5,
@@ -1050,12 +1105,10 @@ class MainWindow(qt.QMainWindow):
             selectable=False,
             resetzoom=False,
         )
-        for index, (phase, phase_calculated) in enumerate(
-            result["phase_patterns"].items()
-        ):
+        for phase, phase_calculated in result["phase_patterns"].items():
             self._integrated_plot_widget.addDataCurve(
                 x,
-                background + phase_calculated,
+                background + phase_calculated[selected],
                 legend=f"Rietveld: {phase}",
                 color=self._refinement_widget.phase_colors.get(self._rietveld_phase_paths[phase]),
                 linewidth=1.0,
@@ -1063,9 +1116,8 @@ class MainWindow(qt.QMainWindow):
                 resetzoom=False,
             )
 
-        self._integrated_plot_widget.setLegendsVisible(True)
-        self._refinement_widget.setResult(result, thread.refinement_flags)
-        thread.deleteLater()
+
+        self.refreshRietveldVisibility()
 
     def onRietveldMapRefinementFinished(self):
         process = self._refinement_process
@@ -1079,6 +1131,8 @@ class MainWindow(qt.QMainWindow):
             message = process.error_text.strip().splitlines()[-1]
             self.warning(f"Mapped Rietveld refinement failed: {message}")
             process.deleteLater()
+            if self._refinement_widget._run_button.isChecked():
+                self._preview_timer.start()
             return
 
         for index in range(1, self._map_tab_widget.count()):
@@ -1093,6 +1147,8 @@ class MainWindow(qt.QMainWindow):
             indices=self._unfixed_indices,
         )
         self.showRietveldMap("Rwp", process.result["stages"][-1]["Rw"])
+        self.displayAvailableRefinement()
+        self.scheduleRietveldRefinement()
         process.deleteLater()
 
     def showRietveldMap(self, title, map_data):
@@ -1112,6 +1168,10 @@ class MainWindow(qt.QMainWindow):
         )
 
     def closeEvent(self, event):
+        self._preview_timer.stop()
+        self._preview_generation += 1
+        self._refinement_widget._run_button.blockSignals(True)
+        self._refinement_widget._run_button.setChecked(False)
         if self._background_widget.process is not None:
             self._background_widget.process.kill()
             self._background_widget.process.waitForFinished()

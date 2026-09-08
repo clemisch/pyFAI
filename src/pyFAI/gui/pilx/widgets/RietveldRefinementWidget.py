@@ -148,7 +148,7 @@ class RietveldRefinementProcess(qt.QProcess):
             self.completed.emit()
 
 
-class CifListWidget(qt.QListWidget):
+class CifListWidget(qt.QTreeWidget):
     filesDropped = qt.Signal(list)
 
     def __init__(self, parent=None):
@@ -186,6 +186,7 @@ class CifListWidget(qt.QListWidget):
 
 
 class RietveldRefinementDialog(qt.QDialog):
+    displayChanged = qt.Signal()
     refinementRequested = qt.Signal()
     mapRefinementRequested = qt.Signal()
     mapRequested = qt.Signal(str, object)
@@ -233,6 +234,11 @@ class RietveldRefinementDialog(qt.QDialog):
         form.addRow("Min/Max 2θ [deg]", radial_layout)
 
         self._cifs = CifListWidget(self)
+        self._cifs.setHeaderLabels(("Fit", "Show", "Name"))
+        self._cifs.setRootIsDecorated(False)
+        for column in (0, 1):
+            self._cifs.header().setSectionResizeMode(column, qt.QHeaderView.ResizeMode.ResizeToContents)
+        self._cifs.itemChanged.connect(self._phaseDisplayChanged)
         self.phase_colors = PhaseColors(self)
         self.phase_colors.changed.connect(self.refreshPhaseColors)
         self._cifs.setAlternatingRowColors(True)
@@ -250,6 +256,12 @@ class RietveldRefinementDialog(qt.QDialog):
         cif_buttons = qt.QHBoxLayout()
         cif_buttons.addWidget(add_cifs)
         cif_buttons.addWidget(remove_cifs)
+        self.show_total = qt.QCheckBox("Show total", self)
+        self.show_background = qt.QCheckBox("Show bkg", self)
+        for checkbox in (self.show_total, self.show_background):
+            checkbox.setChecked(True)
+            checkbox.toggled.connect(self.displayChanged)
+            cif_buttons.addWidget(checkbox)
 
         self._refine_scale = qt.QCheckBox("Phase scales", self)
         self._refine_scale.setChecked(True)
@@ -268,7 +280,14 @@ class RietveldRefinementDialog(qt.QDialog):
         parameters_layout.addWidget(self._refine_peak_width)
 
         self._run_button = qt.QPushButton("Refine selected point", self)
-        self._run_button.clicked.connect(self.refinementRequested)
+        self._run_button.setCheckable(True)
+        self._run_button.setToolTip("While enabled, fit the selected point using the current settings")
+        self._run_button.toggled.connect(self.refinementRequested)
+        for edit in (self._wavelength, self._ttheta_min, self._ttheta_max):
+            edit.valueChanged.connect(self.refinementRequested)
+        for checkbox in (self._refine_scale, self._refine_displacement,
+                         self._refine_unit_cell, self._refine_peak_width):
+            checkbox.toggled.connect(self.refinementRequested)
         self._run_map_button = qt.QPushButton("Refine all points", self)
         self._run_map_button.clicked.connect(self.mapRefinementRequested)
         run_buttons = qt.QHBoxLayout()
@@ -285,7 +304,6 @@ class RietveldRefinementDialog(qt.QDialog):
 
         layout = qt.QVBoxLayout(self)
         layout.addLayout(form)
-        layout.addWidget(qt.QLabel("Phases", self))
         layout.addWidget(self._cifs)
         layout.addLayout(cif_buttons)
         layout.addWidget(parameters)
@@ -293,10 +311,24 @@ class RietveldRefinementDialog(qt.QDialog):
         layout.addWidget(self._parameters)
 
     def refreshPhaseColors(self):
-        for index in range(self._cifs.count()):
-            item = self._cifs.item(index)
-            path = item.data(qt.Qt.ItemDataRole.UserRole)
-            item.setForeground(qt.QColor(self.phase_colors.get(path)))
+        for index in range(self._cifs.topLevelItemCount()):
+            item = self._cifs.topLevelItem(index)
+            path = item.data(2, qt.Qt.ItemDataRole.UserRole)
+            item.setForeground(2, qt.QColor(self.phase_colors.get(path)))
+
+    def _phaseDisplayChanged(self, item, column):
+        if column == 1:
+            self.displayChanged.emit()
+        elif column == 0:
+            self.refinementRequested.emit()
+
+    def shownCifPaths(self):
+        paths = set()
+        for index in range(self._cifs.topLevelItemCount()):
+            item = self._cifs.topLevelItem(index)
+            if item.checkState(1) == qt.Qt.CheckState.Checked:
+                paths.add(str(Path(item.data(2, qt.Qt.ItemDataRole.UserRole)).resolve()))
+        return paths
 
     def choosePhaseColor(self, position):
         item = self._cifs.itemAt(position)
@@ -305,7 +337,7 @@ class RietveldRefinementDialog(qt.QDialog):
         menu = qt.QMenu(self)
         action = menu.addAction("Choose color…")
         if menu.exec(self._cifs.viewport().mapToGlobal(position)) == action:
-            path = item.data(qt.Qt.ItemDataRole.UserRole)
+            path = item.data(2, qt.Qt.ItemDataRole.UserRole)
             color = qt.QColorDialog.getColor(qt.QColor(self.phase_colors.get(path)), self)
             if color.isValid():
                 self.phase_colors.set(path, color.name())
@@ -321,7 +353,9 @@ class RietveldRefinementDialog(qt.QDialog):
 
     def _removeSelectedCifs(self):
         for item in self._cifs.selectedItems():
-            self._cifs.takeItem(self._cifs.row(item))
+            self._cifs.takeTopLevelItem(self._cifs.indexOfTopLevelItem(item))
+        self.displayChanged.emit()
+        self.refinementRequested.emit()
 
     def setWavelength(self, wavelength_A):
         self._file_wavelength = wavelength_A
@@ -367,26 +401,28 @@ class RietveldRefinementDialog(qt.QDialog):
         for path in paths:
             path = str(path)
             if path not in existing:
-                item = qt.QListWidgetItem(Path(path).stem)
+                item = qt.QTreeWidgetItem(["", "", Path(path).stem])
                 item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(qt.Qt.CheckState.Checked)
-                item.setData(qt.Qt.ItemDataRole.UserRole, path)
-                item.setToolTip(path)
-                self._cifs.addItem(item)
-                item.setForeground(qt.QColor(self.phase_colors.get(path)))
+                item.setCheckState(0, qt.Qt.CheckState.Checked)
+                item.setCheckState(1, qt.Qt.CheckState.Checked)
+                item.setData(2, qt.Qt.ItemDataRole.UserRole, path)
+                item.setToolTip(2, path)
+                self._cifs.addTopLevelItem(item)
+                item.setForeground(2, qt.QColor(self.phase_colors.get(path)))
                 existing.add(path)
+        self.refinementRequested.emit()
 
     def cifPaths(self):
         return [
-            self._cifs.item(index).data(qt.Qt.ItemDataRole.UserRole)
-            for index in range(self._cifs.count())
+            self._cifs.topLevelItem(index).data(2, qt.Qt.ItemDataRole.UserRole)
+            for index in range(self._cifs.topLevelItemCount())
         ]
 
     def enabledCifPaths(self):
         return [
-            self._cifs.item(index).data(qt.Qt.ItemDataRole.UserRole)
-            for index in range(self._cifs.count())
-            if self._cifs.item(index).checkState() == qt.Qt.CheckState.Checked
+            self._cifs.topLevelItem(index).data(2, qt.Qt.ItemDataRole.UserRole)
+            for index in range(self._cifs.topLevelItemCount())
+            if self._cifs.topLevelItem(index).checkState(0) == qt.Qt.CheckState.Checked
         ]
 
     def refinementFlags(self):
@@ -398,13 +434,7 @@ class RietveldRefinementDialog(qt.QDialog):
         }
 
     def setRunning(self, running, mapped=False):
-        self._run_button.setEnabled(not running)
         self._run_map_button.setEnabled(not running)
-        self._run_button.setText(
-            "Refinement running…"
-            if running and not mapped
-            else "Refine selected point"
-        )
         self._run_map_button.setText(
             "Refining all points…"
             if running and mapped

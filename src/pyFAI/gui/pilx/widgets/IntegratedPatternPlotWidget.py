@@ -38,7 +38,6 @@ __status__ = "development"
 import numpy
 from silx.gui import icons, qt
 from silx.gui.plot import PlotWidget
-from silx.gui.plot.LegendSelector import LegendsDockWidget
 from silx.gui.plot.actions.control import ResetZoomAction
 from silx.gui.plot.actions.io import SaveAction
 from silx.gui.plot.actions.mode import PanModeAction, ZoomModeAction
@@ -77,9 +76,10 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._toolbar = self._initToolbar()
         self.addToolBar(self._toolbar)
 
-        self._legends = LegendsDockWidget(parent=self, plot=self)
-        self.addDockWidget(qt.Qt.RightDockWidgetArea, self._legends)
-        self._legends.hide()
+        self._legend_timer = qt.QTimer(self)
+        self._legend_timer.setSingleShot(True)
+        self._legend_timer.timeout.connect(self.updatePlotLegend)
+        self.sigContentChanged.connect(self.scheduleLegendUpdate)
 
         self._statusBar = self._initStatusBar()
         centralWidget = self._initCentralWidget(self._statusBar)
@@ -93,8 +93,32 @@ class IntegratedPatternPlotWidget(PlotWidget):
     def __iter__(self):
         yield from self.getAllCurves(just_legend=True)
 
-    def setLegendsVisible(self, visible):
-        self._legends.setVisible(visible)
+    def scheduleLegendUpdate(self, *args):
+        self._legend_timer.start(0)
+
+    def updatePlotLegend(self):
+        from matplotlib.lines import Line2D
+
+        backend = self.getBackend()
+        if not hasattr(backend, "ax"):
+            return
+        handles = []
+        for curve in self.getAllCurves():
+            if not curve.isVisible():
+                continue
+            label = curve.getName()
+            if label == "INTEGRATE":
+                label = "Observed"
+            elif label.startswith("Rietveld: "):
+                label = label.removeprefix("Rietveld: ")
+            handles.append(Line2D([], [], color=curve.getColor(), label=label))
+        previous = backend.ax.get_legend()
+        if previous is not None:
+            previous.remove()
+        if handles:
+            legend = backend.ax.legend(handles=handles, loc="upper right", fontsize="small")
+            legend.set_in_layout(False)
+        backend.fig.canvas.draw_idle()
 
     def addDataCurve(self, x, y, legend, **kwargs):
         y = numpy.asarray(y)
