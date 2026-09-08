@@ -33,6 +33,7 @@ import numpy
 from silx.gui import qt
 
 from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
+from .PlotColors import PLOT_COLORS
 
 
 class ReflectionPhaseList(qt.QTreeWidget):
@@ -75,16 +76,7 @@ class ReflectionPhaseList(qt.QTreeWidget):
 class ReflectionOverlayDialog(qt.QDialog):
     overlayChanged = qt.Signal(object)
 
-    _COLORS = (
-        "#1f77b4",
-        "#ff7f0e",
-        "#2ca02c",
-        "#d62728",
-        "#9467bd",
-        "#8c564b",
-        "#e377c2",
-        "#17becf",
-    )
+    _COLORS = PLOT_COLORS[1:]
 
     def __init__(self, parent=None, phase_colors=None):
         super().__init__(parent)
@@ -201,9 +193,14 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase_details = qt.QWidget(self)
         phase_details.setLayout(phase_form)
 
-        self._show_labels = qt.QCheckBox("Show hkl labels", self)
+        self._show_labels = qt.QCheckBox("hkl labels", self)
         self._show_labels.toggled.connect(self._labelsChanged)
-        self._condense = qt.QCheckBox("Condense nearby reflections", self)
+        self._show_ticks = qt.QCheckBox("Ticks", self)
+        self._show_ticks.setChecked(True)
+        self._show_ticks.toggled.connect(self._visualizationChanged)
+        self._show_lines = qt.QCheckBox("Lines", self)
+        self._show_lines.toggled.connect(self._visualizationChanged)
+        self._condense = qt.QCheckBox("Group reflections", self)
         self._condense.setChecked(True)
         self._condense.toggled.connect(self._visualizationChanged)
         self._merge_tolerance = ModifierDoubleSpinBox(self)
@@ -213,8 +210,14 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._merge_tolerance.valueChanged.connect(self._emitOverlay)
         visualization_form = qt.QFormLayout()
         visualization_form.addRow(self._show_labels)
-        visualization_form.addRow(self._condense)
-        visualization_form.addRow("Merge tolerance [deg]", self._merge_tolerance)
+        visualization_form.addRow(self._show_ticks)
+        visualization_form.addRow(self._show_lines)
+        grouping = qt.QHBoxLayout()
+        grouping.addWidget(self._condense)
+        grouping.addSpacing(12)
+        grouping.addWidget(qt.QLabel("tol [deg]", self))
+        grouping.addWidget(self._merge_tolerance)
+        visualization_form.addRow(grouping)
         visualization = qt.QGroupBox("Display", self)
         visualization.setLayout(visualization_form)
 
@@ -788,6 +791,8 @@ class ReflectionOverlayDialog(qt.QDialog):
                     "color": phase["color"],
                     "reflections": reflections,
                     "show_labels": self._show_labels.isChecked(),
+                    "show_ticks": self._show_ticks.isChecked(),
+                    "show_lines": self._show_lines.isChecked(),
                 }
             )
         self.overlayChanged.emit(overlays)

@@ -49,6 +49,7 @@ from ..HorizontalRangeROI import HorizontalRangeROI
 from ..models import ROI_COLOR
 from .RoiModeAction import RoiModeAction
 from .RoiRangeWidget import RoiRangeWidget
+from .PlotColors import PLOT_COLORS
 
 
 class IntegratedPatternPlotWidget(PlotWidget):
@@ -61,6 +62,7 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._curve_y_data = {}
         self._data_y_label = ""
         super().__init__(parent, backend)
+        self.setDefaultColors(PLOT_COLORS)
         self.setDataMargins(0.02, 0.02, 0.02, 0.02)
         self.sigPlotSignal.connect(self.onRectDraw)
 
@@ -121,7 +123,10 @@ class IntegratedPatternPlotWidget(PlotWidget):
                 label = "Observed"
             elif label.startswith("Rietveld: "):
                 label = label.removeprefix("Rietveld: ")
-            handles.append(Line2D([], [], color=curve.getColor(), label=label))
+            handles.append(Line2D(
+                [], [], color=curve.getColor(), linestyle=curve.getLineStyle(),
+                label=label,
+            ))
         previous = backend.ax.get_legend()
         if previous is not None:
             previous.remove()
@@ -258,16 +263,31 @@ class IntegratedPatternPlotWidget(PlotWidget):
                 ydata[1::3] = tick_top
                 ydata[2::3] = numpy.nan
                 legend = f"Reflections: {overlay['name']}"
-                self.addCurve(
-                    xdata,
-                    ydata,
-                    legend=legend,
-                    color=overlay["color"],
-                    linewidth=1.0,
-                    selectable=False,
-                    resetzoom=False,
-                )
-                self._reflection_items.append((legend, "curve"))
+                if overlay["show_ticks"]:
+                    self.addCurve(
+                        xdata,
+                        ydata,
+                        legend=legend,
+                        color=overlay["color"],
+                        linewidth=1.0,
+                        selectable=False,
+                        resetzoom=False,
+                    )
+                    self._reflection_items.append((legend, "curve"))
+
+                if overlay["show_lines"]:
+                    color = qt.QColor(overlay["color"])
+                    color.setAlphaF(0.6)
+                    for index, position in enumerate(positions):
+                        marker_legend = f"{legend}: line {index}"
+                        marker = self.addXMarker(
+                            position,
+                            legend=marker_legend,
+                            color=color,
+                            selectable=False,
+                        )
+                        marker.setLineWidth(1.0)
+                        self._reflection_items.append((marker_legend, "marker"))
 
                 if overlay["show_labels"]:
                     for index, reflection in enumerate(reflections):

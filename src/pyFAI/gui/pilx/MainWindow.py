@@ -69,6 +69,7 @@ from .widgets.IntegratedPatternPlotWidget import IntegratedPatternPlotWidget
 from .widgets.MapPlotWidget import MapPlotWidget
 from .widgets.BackgroundWidget import BackgroundDialog
 from .widgets.ReflectionOverlayWidget import ReflectionOverlayDialog
+from .widgets.PlotColors import PLOT_COLORS
 from .widgets.RietveldRefinementWidget import (
     RietveldRefinementDialog,
     RietveldRefinementProcess,
@@ -439,13 +440,15 @@ class MainWindow(qt.QMainWindow):
             elif legend == "INTEGRATE":
                 self._integrated_plot_widget.addDataCurve(
                     x[start:stop], baseline, legend="Estimated background",
-                    color="#ff7f0e", selectable=False, resetzoom=False,
+                    color="black", linestyle="--", selectable=False,
+                    resetzoom=False,
                 )
 
         self._integrated_plot_widget.addDataCurve(
             x=x,
             y=curve,
             legend=legend,
+            color=PLOT_COLORS[0] if legend == "INTEGRATE" else color,
             selectable=False,
             resetzoom=self._integrated_plot_widget.getGraphXLimits() == (0, 100),
         )
@@ -1113,7 +1116,7 @@ class MainWindow(qt.QMainWindow):
             result["calculated"][selected] - baseline,
             legend="Rietveld: total",
             linestyle="-",
-            color="#d62728",
+            color="black",
             linewidth=1.5,
             selectable=False,
             resetzoom=False,
@@ -1122,8 +1125,8 @@ class MainWindow(qt.QMainWindow):
             x,
             background,
             legend="Rietveld: background",
-            linestyle="-",
-            color="#7f7f7f",
+            linestyle="--",
+            color="black",
             linewidth=1.0,
             selectable=False,
             resetzoom=False,

@@ -6,6 +6,7 @@ py.install_sources(
 'IntegratedPatternPlotWidget.py',
 'MapPlotWidget.py',
 'ModifierDoubleSpinBox.py',
+'PlotColors.py',
 'OpenAxisDatasetAction.py',
 'ClearPointsAction.py',
 'MapPlotContextMenu.py',

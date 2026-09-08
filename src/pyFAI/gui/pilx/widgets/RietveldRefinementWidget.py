@@ -35,11 +35,12 @@ from pathlib import Path
 from silx.gui import qt
 
 from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
+from .PlotColors import PLOT_COLORS
 
 
 class PhaseColors(qt.QObject):
     changed = qt.Signal()
-    palette = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf")
+    palette = PLOT_COLORS[1:]
 
     def __init__(self, parent=None):
         super().__init__(parent)
