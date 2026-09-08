@@ -117,8 +117,8 @@ class MainWindow(qt.QMainWindow):
         )
 
         self._integrated_plot_widget = IntegratedPatternPlotWidget(self)
-        self._integrated_plot_widget.roi.sigRegionChanged.connect(self.onRoiEdition)
-        self._integrated_plot_widget.roi.sigRegionChanged.connect(self.drawContoursOnImage)
+        self._integrated_plot_widget.roi.sigRangeCommitted.connect(self.onRoiEdition)
+        self._integrated_plot_widget.roi.sigRangeCommitted.connect(self.drawContoursOnImage)
         self._integrated_plot_widget.fit_roi.sigRegionChanged.connect(self.updateFitBounds)
 
         self._refinement_widget = RietveldRefinementDialog(self)
