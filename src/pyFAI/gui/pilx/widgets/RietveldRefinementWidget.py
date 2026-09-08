@@ -204,8 +204,8 @@ class RietveldRefinementDialog(qt.QDialog):
         self._wavelength_lock.setCheckable(True)
         self._wavelength_lock.setChecked(True)
         self._wavelength_lock.setToolTip("Lock wavelength editing")
-        self._wavelength_lock.toggled.connect(self._wavelength.setReadOnly)
-        self._wavelength.setReadOnly(True)
+        self._wavelength_lock.toggled.connect(self._wavelength.setDisabled)
+        self._wavelength.setDisabled(True)
         self._file_wavelength = None
         self._load_wavelength = qt.QPushButton("From file", self)
         self._load_wavelength.setEnabled(False)
