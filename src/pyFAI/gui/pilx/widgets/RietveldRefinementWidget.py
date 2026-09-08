@@ -31,9 +31,27 @@ import pickle
 import traceback
 from math import degrees
 from pathlib import Path
-from pprint import pformat
 
 from silx.gui import qt
+
+
+class PhaseColors(qt.QObject):
+    changed = qt.Signal()
+    palette = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.colors = {}
+
+    def get(self, path):
+        key = str(Path(path).resolve())
+        if key not in self.colors:
+            self.colors[key] = self.palette[len(self.colors) % len(self.palette)]
+        return self.colors[key]
+
+    def set(self, path, color):
+        self.colors[str(Path(path).resolve())] = color
+        self.changed.emit()
 
 
 class RietveldRefinementThread(qt.QThread):
@@ -181,7 +199,6 @@ class RietveldRefinementDialog(qt.QDialog):
         self._wavelength = qt.QDoubleSpinBox(self)
         self._wavelength.setDecimals(6)
         self._wavelength.setRange(0.000001, 100.0)
-        self._wavelength.setSuffix(" Å")
         self._wavelength_lock = qt.QPushButton("Lock", self)
         self._wavelength_lock.setCheckable(True)
         self._wavelength_lock.setChecked(True)
@@ -205,17 +222,22 @@ class RietveldRefinementDialog(qt.QDialog):
 
         self._ttheta_min = qt.QDoubleSpinBox(self)
         self._ttheta_min.setDecimals(4)
-        self._ttheta_min.setSuffix("°")
         self._ttheta_max = qt.QDoubleSpinBox(self)
         self._ttheta_max.setDecimals(4)
-        self._ttheta_max.setSuffix("°")
 
         form = qt.QFormLayout()
-        form.addRow("Wavelength λ", wavelength_widget)
-        form.addRow("Minimum 2θ", self._ttheta_min)
-        form.addRow("Maximum 2θ", self._ttheta_max)
+        form.addRow("Wavelength [Å]", wavelength_widget)
+        radial_layout = qt.QHBoxLayout()
+        radial_layout.addWidget(self._ttheta_min)
+        radial_layout.addWidget(self._ttheta_max)
+        form.addRow("Min/Max 2θ [deg]", radial_layout)
 
         self._cifs = CifListWidget(self)
+        self.phase_colors = PhaseColors(self)
+        self.phase_colors.changed.connect(self.refreshPhaseColors)
+        self._cifs.setAlternatingRowColors(True)
+        self._cifs.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
+        self._cifs.customContextMenuRequested.connect(self.choosePhaseColor)
         self._cifs.setSelectionMode(
             qt.QAbstractItemView.SelectionMode.ExtendedSelection
         )
@@ -260,19 +282,6 @@ class RietveldRefinementDialog(qt.QDialog):
         self._parameters.setMinimumHeight(180)
         self._parameters.itemDoubleClicked.connect(self._requestMap)
 
-        self._raw_result = qt.QPlainTextEdit(self)
-        self._raw_result.setReadOnly(True)
-        self._raw_result.setLineWrapMode(qt.QPlainTextEdit.NoWrap)
-        self._raw_result.setFont(
-            qt.QFontDatabase.systemFont(qt.QFontDatabase.FixedFont)
-        )
-        self._raw_result.setVisible(False)
-        raw_result_group = qt.QGroupBox("Raw result (arrays abbreviated)", self)
-        raw_result_group.setCheckable(True)
-        raw_result_group.setChecked(False)
-        raw_result_layout = qt.QVBoxLayout(raw_result_group)
-        raw_result_layout.addWidget(self._raw_result)
-        raw_result_group.toggled.connect(self._raw_result.setVisible)
 
         layout = qt.QVBoxLayout(self)
         layout.addLayout(form)
@@ -282,7 +291,24 @@ class RietveldRefinementDialog(qt.QDialog):
         layout.addWidget(parameters)
         layout.addLayout(run_buttons)
         layout.addWidget(self._parameters)
-        layout.addWidget(raw_result_group)
+
+    def refreshPhaseColors(self):
+        for index in range(self._cifs.count()):
+            item = self._cifs.item(index)
+            path = item.data(qt.Qt.ItemDataRole.UserRole)
+            item.setForeground(qt.QColor(self.phase_colors.get(path)))
+
+    def choosePhaseColor(self, position):
+        item = self._cifs.itemAt(position)
+        if item is None:
+            return
+        menu = qt.QMenu(self)
+        action = menu.addAction("Choose color…")
+        if menu.exec(self._cifs.viewport().mapToGlobal(position)) == action:
+            path = item.data(qt.Qt.ItemDataRole.UserRole)
+            color = qt.QColorDialog.getColor(qt.QColor(self.phase_colors.get(path)), self)
+            if color.isValid():
+                self.phase_colors.set(path, color.name())
 
     def _addCifs(self):
         filenames, _ = qt.QFileDialog.getOpenFileNames(
@@ -341,12 +367,13 @@ class RietveldRefinementDialog(qt.QDialog):
         for path in paths:
             path = str(path)
             if path not in existing:
-                item = qt.QListWidgetItem(Path(path).name)
+                item = qt.QListWidgetItem(Path(path).stem)
                 item.setFlags(item.flags() | qt.Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(qt.Qt.CheckState.Checked)
                 item.setData(qt.Qt.ItemDataRole.UserRole, path)
                 item.setToolTip(path)
                 self._cifs.addItem(item)
+                item.setForeground(qt.QColor(self.phase_colors.get(path)))
                 existing.add(path)
 
     def cifPaths(self):
@@ -396,7 +423,6 @@ class RietveldRefinementDialog(qt.QDialog):
 
     def clearResult(self):
         self._parameters.clear()
-        self._raw_result.clear()
 
     def setResult(self, result, flags, indices=None):
         self._parameters.clear()
@@ -544,4 +570,3 @@ class RietveldRefinementDialog(qt.QDialog):
 
         self._parameters.expandAll()
         self._parameters.resizeColumnToContents(0)
-        self._raw_result.setPlainText(pformat(result, sort_dicts=False))

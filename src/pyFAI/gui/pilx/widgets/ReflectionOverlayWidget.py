@@ -84,8 +84,11 @@ class ReflectionOverlayDialog(qt.QDialog):
         "#17becf",
     )
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, phase_colors=None):
         super().__init__(parent)
+        self.phase_colors = phase_colors
+        if phase_colors is not None:
+            phase_colors.changed.connect(self.refreshPhaseColors)
         self.setWindowTitle("Expected reflections")
         self.setModal(False)
         self.resize(600, 650)
@@ -132,12 +135,24 @@ class ReflectionOverlayDialog(qt.QDialog):
 
         general_form = qt.QFormLayout()
         general_form.addRow("Wavelength [Å]", wavelength_widget)
+        radial_layout = qt.QHBoxLayout()
+        self._ttheta_min = qt.QDoubleSpinBox(self)
+        self._ttheta_max = qt.QDoubleSpinBox(self)
+        for edit, value in ((self._ttheta_min, 0), (self._ttheta_max, 90)):
+            edit.setDecimals(6)
+            edit.setRange(0, 180)
+            edit.setValue(value)
+            edit.valueChanged.connect(self._radialRangeChanged)
+            radial_layout.addWidget(edit)
+        general_form.addRow("Min/Max 2θ [deg]", radial_layout)
 
         self._phase_list = ReflectionPhaseList(self)
         self._phase_list.setColumnCount(3)
         self._phase_list.setHeaderLabels(("Phase", "Source", "Space group"))
         self._phase_list.setRootIsDecorated(False)
         self._phase_list.setAlternatingRowColors(True)
+        self._phase_list.setContextMenuPolicy(qt.Qt.ContextMenuPolicy.CustomContextMenu)
+        self._phase_list.customContextMenuRequested.connect(self.choosePhaseColor)
         self._phase_list.setSelectionMode(
             qt.QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -245,9 +260,40 @@ class ReflectionOverlayDialog(qt.QDialog):
 
     def setRadialRange(self, minimum, maximum, step=None):
         self._ttheta_range = (float(minimum), float(maximum))
+        for edit, value in ((self._ttheta_min, minimum), (self._ttheta_max, maximum)):
+            edit.blockSignals(True)
+            edit.setValue(value)
+            edit.blockSignals(False)
         if step is not None and numpy.isfinite(step) and step > 0:
             self._merge_tolerance.setValue(float(step))
         self._invalidateAllPhases()
+
+    def _radialRangeChanged(self):
+        self._ttheta_range = (self._ttheta_min.value(), self._ttheta_max.value())
+        self._invalidateAllPhases()
+
+    def refreshPhaseColors(self):
+        for index, phase in enumerate(self._phases):
+            if phase["path"] is not None and self.phase_colors is not None:
+                phase["color"] = self.phase_colors.get(phase["path"])
+            self._phase_list.topLevelItem(index).setForeground(0, qt.QColor(phase["color"]))
+        self._emitOverlay()
+
+    def choosePhaseColor(self, position):
+        item = self._phase_list.itemAt(position)
+        if item is None:
+            return
+        phase = self._phases[self._phase_list.indexOfTopLevelItem(item)]
+        menu = qt.QMenu(self)
+        action = menu.addAction("Choose color…")
+        if menu.exec(self._phase_list.viewport().mapToGlobal(position)) == action:
+            color = qt.QColorDialog.getColor(qt.QColor(phase["color"]), self)
+            if color.isValid():
+                phase["color"] = color.name()
+                if phase["path"] is not None and self.phase_colors is not None:
+                    self.phase_colors.set(phase["path"], color.name())
+                else:
+                    self.refreshPhaseColors()
 
     def setCifPaths(self, paths):
         self._phases.clear()
@@ -350,6 +396,8 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._emitOverlay()
 
     def _appendPhase(self, phase):
+        if phase["path"] is not None and self.phase_colors is not None:
+            phase["color"] = self.phase_colors.get(phase["path"])
         self._phases.append(phase)
         item = qt.QTreeWidgetItem(
             [phase["name"], phase["source"], self._spaceGroupText(phase)]
@@ -674,7 +722,9 @@ class ReflectionOverlayDialog(qt.QDialog):
         for phase in self._phases:
             if not phase["visible"]:
                 continue
-            reflections = phase["reflections"]
+            minimum, maximum = self._ttheta_range
+            reflections = [entry for entry in phase["reflections"]
+                           if minimum <= entry["position"] <= maximum]
             if self._condense.isChecked() and reflections:
                 condensed = []
                 current = [reflections[0]]

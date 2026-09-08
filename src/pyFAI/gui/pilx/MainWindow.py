@@ -121,6 +121,8 @@ class MainWindow(qt.QMainWindow):
         self._integrated_plot_widget.roi.sigRegionChanged.connect(self.drawContoursOnImage)
 
         self._refinement_widget = RietveldRefinementDialog(self)
+        self._rietveld_phase_paths = {}
+        self._refinement_widget.phase_colors.changed.connect(self.refreshRietveldColors)
         self._refinement_widget.refinementRequested.connect(
             self.runRietveldRefinement
         )
@@ -805,6 +807,12 @@ class MainWindow(qt.QMainWindow):
                 self._integrated_plot_widget.removeCurve(legend=legend)
         self._integrated_plot_widget.setLegendsVisible(False)
 
+    def refreshRietveldColors(self):
+        for phase, path in self._rietveld_phase_paths.items():
+            curve = self._integrated_plot_widget.getCurve(f"Rietveld: {phase}")
+            if curve is not None:
+                curve.setColor(self._refinement_widget.phase_colors.get(path))
+
     def showRietveldRefinement(self):
         self._refinement_widget.show()
         self._refinement_widget.raise_()
@@ -813,7 +821,9 @@ class MainWindow(qt.QMainWindow):
     def showReflectionOverlay(self):
         if self._reflection_widget is None:
             try:
-                self._reflection_widget = ReflectionOverlayDialog(self)
+                self._reflection_widget = ReflectionOverlayDialog(
+                    self, phase_colors=self._refinement_widget.phase_colors
+                )
             except ImportError:
                 self.warning(
                     "Expected reflection positions require pymatgen. "
@@ -951,6 +961,9 @@ class MainWindow(qt.QMainWindow):
             flags,
             parent=self,
         )
+        self._rietveld_phase_paths = {
+            os.path.splitext(os.path.basename(path))[0]: path for path in inputs["cifs"]
+        }
         self._refinement_thread.finished.connect(
             self.onRietveldRefinementFinished
         )
@@ -1037,15 +1050,6 @@ class MainWindow(qt.QMainWindow):
             selectable=False,
             resetzoom=False,
         )
-        phase_colors = (
-            "#2ca02c",
-            "#9467bd",
-            "#8c564b",
-            "#e377c2",
-            "#bcbd22",
-            "#17becf",
-            "#ff7f0e",
-        )
         for index, (phase, phase_calculated) in enumerate(
             result["phase_patterns"].items()
         ):
@@ -1053,7 +1057,7 @@ class MainWindow(qt.QMainWindow):
                 x,
                 background + phase_calculated,
                 legend=f"Rietveld: {phase}",
-                color=phase_colors[index % len(phase_colors)],
+                color=self._refinement_widget.phase_colors.get(self._rietveld_phase_paths[phase]),
                 linewidth=1.0,
                 selectable=False,
                 resetzoom=False,
