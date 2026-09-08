@@ -119,6 +119,7 @@ class MainWindow(qt.QMainWindow):
         self._integrated_plot_widget = IntegratedPatternPlotWidget(self)
         self._integrated_plot_widget.roi.sigRegionChanged.connect(self.onRoiEdition)
         self._integrated_plot_widget.roi.sigRegionChanged.connect(self.drawContoursOnImage)
+        self._integrated_plot_widget.fit_roi.sigRegionChanged.connect(self.updateFitBounds)
 
         self._refinement_widget = RietveldRefinementDialog(self)
         self._rietveld_phase_paths = {}
@@ -371,6 +372,8 @@ class MainWindow(qt.QMainWindow):
             self._reflection_widget.setWavelength(wavelength_A)
             self._reflection_widget.setRadialRange(*self._reflection_radial_range)
             self._reflection_widget.setCifPaths(cifs)
+        self._integrated_plot_widget.fit_roi.setRange(float(radial_values[0]), float(radial_values[-1]))
+        self.updateFitBounds()
 
         self._map_plot_widget.setScatterData(map_data, fast_values, slow_values, fast_label, slow_label)
         # BUG: selectMapPoint(0, 0) does not work at first render cause the picking fails
@@ -384,6 +387,24 @@ class MainWindow(qt.QMainWindow):
             symbol="o",
             legend="MAP_LOCATION",
         )
+
+    def updateFitBounds(self):
+        grid = self._background_widget.radial_values
+        if grid is None:
+            return
+        roi = self._integrated_plot_widget.fit_roi
+        lower, upper = roi.getRange()
+        lower = max(float(grid[0]), min(float(grid[-1]), lower))
+        upper = max(lower, min(float(grid[-1]), upper))
+        if (lower, upper) != roi.getRange():
+            roi.setRange(lower, upper)
+            return
+        self._background_widget.fit_bounds = (lower, upper)
+        self._background_widget.updateAutomaticSmoothness()
+        self._refinement_widget.setRadialRange(lower, upper)
+        self._reflection_radial_range = (lower, upper, self._reflection_radial_range[2])
+        if self._reflection_widget is not None:
+            self._reflection_widget.setRadialRange(lower, upper)
 
     def getRoiRadialRange(self) -> tuple[float | None, float | None]:
         return self._integrated_plot_widget.roi.getRange()
@@ -1091,6 +1112,7 @@ class MainWindow(qt.QMainWindow):
             x,
             result["calculated"][selected] - baseline,
             legend="Rietveld: total",
+            linestyle="-",
             color="#d62728",
             linewidth=1.5,
             selectable=False,
@@ -1100,6 +1122,7 @@ class MainWindow(qt.QMainWindow):
             x,
             background,
             legend="Rietveld: background",
+            linestyle="-",
             color="#7f7f7f",
             linewidth=1.0,
             selectable=False,
@@ -1110,6 +1133,7 @@ class MainWindow(qt.QMainWindow):
                 x,
                 background + phase_calculated[selected],
                 legend=f"Rietveld: {phase}",
+                linestyle="-",
                 color=self._refinement_widget.phase_colors.get(self._rietveld_phase_paths[phase]),
                 linewidth=1.0,
                 selectable=False,

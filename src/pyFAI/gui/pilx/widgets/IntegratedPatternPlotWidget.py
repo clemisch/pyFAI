@@ -72,6 +72,16 @@ class IntegratedPatternPlotWidget(PlotWidget):
         # Interconnect the ROI and the ROI range widget
         self._roi_range.updated.connect(self.roi.setRange)
         self.roi.sigRegionChanged.connect(self.updateRoiRangeWidget)
+        self.fit_roi = HorizontalRangeROI()
+        self.fit_roi.setEditable(True)
+        self._roi_manager.addRoi(self.fit_roi)
+        # RegionOfInterestManager assigns its default style when adding an ROI.
+        self.fit_roi.setColor("#8000ff")
+        # silx exposes no public option for hiding only the centre handle.
+        self.fit_roi._markerCen.setVisible(False)
+        self._fit_range = RoiRangeWidget(self, title="Fit bounds")
+        self._fit_range.updated.connect(self.fit_roi.setRange)
+        self.fit_roi.sigRegionChanged.connect(self.updateFitRangeWidget)
 
         self._toolbar = self._initToolbar()
         self.addToolBar(self._toolbar)
@@ -336,9 +346,10 @@ class IntegratedPatternPlotWidget(PlotWidget):
         gridLayout = qt.QGridLayout()
         gridLayout.setSpacing(0)
         gridLayout.setContentsMargins(0, 0, 0, 0)
-        gridLayout.addWidget(self.getWidgetHandle(), 0, 0)
-        gridLayout.addWidget(status_bar, 1, 0, 1, -1)
+        gridLayout.addWidget(self.getWidgetHandle(), 0, 0, 1, 2)
+        gridLayout.addWidget(status_bar, 1, 0, 1, 2)
         gridLayout.addWidget(self._roi_range, 2, 0)
+        gridLayout.addWidget(self._fit_range, 2, 1)
 
         gridLayout.setRowStretch(0, 1)
         centralWidget = qt.QWidget(self)
@@ -372,6 +383,9 @@ class IntegratedPatternPlotWidget(PlotWidget):
         if v_max < v_min:
             v_min, v_max = v_max, v_min
         self.roi.setRange(v_min, v_max)
+
+    def updateFitRangeWidget(self):
+        self._fit_range.setRange(*self.fit_roi.getRange())
 
     def updateRoiRangeWidget(self):
         v_min, v_max = self.roi.getRange()

@@ -221,17 +221,10 @@ class RietveldRefinementDialog(qt.QDialog):
         wavelength_widget = qt.QWidget(self)
         wavelength_widget.setLayout(wavelength_layout)
 
-        self._ttheta_min = qt.QDoubleSpinBox(self)
-        self._ttheta_min.setDecimals(4)
-        self._ttheta_max = qt.QDoubleSpinBox(self)
-        self._ttheta_max.setDecimals(4)
+        self._ttheta_range = (0.0, 180.0)
 
         form = qt.QFormLayout()
         form.addRow("Wavelength [Å]", wavelength_widget)
-        radial_layout = qt.QHBoxLayout()
-        radial_layout.addWidget(self._ttheta_min)
-        radial_layout.addWidget(self._ttheta_max)
-        form.addRow("Min/Max 2θ [deg]", radial_layout)
 
         self._cifs = CifListWidget(self)
         self._cifs.setHeaderLabels(("Fit", "Show", "Name"))
@@ -283,7 +276,7 @@ class RietveldRefinementDialog(qt.QDialog):
         self._run_button.setCheckable(True)
         self._run_button.setToolTip("While enabled, fit the selected point using the current settings")
         self._run_button.toggled.connect(self.refinementRequested)
-        for edit in (self._wavelength, self._ttheta_min, self._ttheta_max):
+        for edit in (self._wavelength,):
             edit.valueChanged.connect(self.refinementRequested)
         for checkbox in (self._refine_scale, self._refine_displacement,
                          self._refine_unit_cell, self._refine_peak_width):
@@ -379,18 +372,11 @@ class RietveldRefinementDialog(qt.QDialog):
         return self._wavelength.value()
 
     def setRadialRange(self, minimum, maximum):
-        self._ttheta_min.setRange(minimum, maximum)
-        self._ttheta_max.setRange(minimum, maximum)
-        refinement_minimum = max(minimum, 3.0)
-        refinement_maximum = min(maximum, 40.0)
-        if refinement_minimum >= refinement_maximum:
-            refinement_minimum = minimum
-            refinement_maximum = maximum
-        self._ttheta_min.setValue(refinement_minimum)
-        self._ttheta_max.setValue(refinement_maximum)
+        self._ttheta_range = (minimum, maximum)
+        self.refinementRequested.emit()
 
     def radialRange(self):
-        return self._ttheta_min.value(), self._ttheta_max.value()
+        return self._ttheta_range
 
     def setCifPaths(self, paths):
         self._cifs.clear()

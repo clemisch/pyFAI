@@ -135,16 +135,6 @@ class ReflectionOverlayDialog(qt.QDialog):
 
         general_form = qt.QFormLayout()
         general_form.addRow("Wavelength [Å]", wavelength_widget)
-        radial_layout = qt.QHBoxLayout()
-        self._ttheta_min = qt.QDoubleSpinBox(self)
-        self._ttheta_max = qt.QDoubleSpinBox(self)
-        for edit, value in ((self._ttheta_min, 0), (self._ttheta_max, 90)):
-            edit.setDecimals(6)
-            edit.setRange(0, 180)
-            edit.setValue(value)
-            edit.valueChanged.connect(self._radialRangeChanged)
-            radial_layout.addWidget(edit)
-        general_form.addRow("Min/Max 2θ [deg]", radial_layout)
 
         self._phase_list = ReflectionPhaseList(self)
         self._phase_list.setColumnCount(3)
@@ -260,16 +250,8 @@ class ReflectionOverlayDialog(qt.QDialog):
 
     def setRadialRange(self, minimum, maximum, step=None):
         self._ttheta_range = (float(minimum), float(maximum))
-        for edit, value in ((self._ttheta_min, minimum), (self._ttheta_max, maximum)):
-            edit.blockSignals(True)
-            edit.setValue(value)
-            edit.blockSignals(False)
         if step is not None and numpy.isfinite(step) and step > 0:
             self._merge_tolerance.setValue(float(step))
-        self._invalidateAllPhases()
-
-    def _radialRangeChanged(self):
-        self._ttheta_range = (self._ttheta_min.value(), self._ttheta_max.value())
         self._invalidateAllPhases()
 
     def refreshPhaseColors(self):

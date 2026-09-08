@@ -14,11 +14,7 @@ class BackgroundDialog(qt.QDialog):
         super().__init__(parent)
         self.radial_values = None
         self.setWindowTitle("Histogram background")
-        self.minimum = qt.QDoubleSpinBox(self)
-        self.maximum = qt.QDoubleSpinBox(self)
-        for edit in (self.minimum, self.maximum):
-            edit.setDecimals(6)
-            edit.setRange(0, 180)
+        self.fit_bounds = (0.0, 180.0)
         self.automatic = qt.QPushButton("Auto", self)
         self.automatic.setCheckable(True)
         self.automatic.setChecked(True)
@@ -29,8 +25,6 @@ class BackgroundDialog(qt.QDialog):
         self.smoothness.setEnabled(False)
         self.automatic.toggled.connect(self.smoothness.setDisabled)
         self.automatic.toggled.connect(self.updateAutomaticSmoothness)
-        self.minimum.valueChanged.connect(self.updateAutomaticSmoothness)
-        self.maximum.valueChanged.connect(self.updateAutomaticSmoothness)
         self.overlay = qt.QRadioButton("Overlay background", self)
         self.subtract = qt.QRadioButton("Substract background", self)
         self.overlay.setChecked(True)
@@ -44,10 +38,6 @@ class BackgroundDialog(qt.QDialog):
         self.status.hide()
         form = qt.QFormLayout(self)
         form.setVerticalSpacing(12)
-        bounds = qt.QHBoxLayout()
-        bounds.addWidget(self.minimum)
-        bounds.addWidget(self.maximum)
-        form.addRow("Min/Max 2θ [deg]", bounds)
         smoothness = qt.QHBoxLayout()
         smoothness.addWidget(self.automatic)
         smoothness.addWidget(self.smoothness)
@@ -56,7 +46,7 @@ class BackgroundDialog(qt.QDialog):
             separator = qt.QFrame(self)
             separator.setFrameShape(qt.QFrame.Shape.HLine)
             separator.setFrameShadow(qt.QFrame.Shadow.Sunken)
-            form.addRow(separator)
+            # form.addRow(separator)
             form.addRow(button)
         form.addRow(self.subtract)
         self.resize(self.sizeHint().width() + 30, self.sizeHint().height() + 30)
@@ -71,8 +61,7 @@ class BackgroundDialog(qt.QDialog):
         self.radial_values = numpy.asarray(radial_values)
         minimum, maximum = float(radial_values[0]), float(radial_values[-1])
         self.radial_bounds = (minimum, maximum)
-        self.minimum.setValue(minimum)
-        self.maximum.setValue(maximum)
+        self.fit_bounds = (minimum, maximum)
         self.results.clear()
         self.map_result = None
         self.subtract.blockSignals(True)
@@ -103,13 +92,7 @@ class BackgroundDialog(qt.QDialog):
         return self.results.get(indices)
 
     def selectedRange(self):
-        lower, upper = self.minimum.value(), self.maximum.value()
-        # Preserve endpoint samples despite spin-box display rounding.
-        if abs(lower - self.radial_bounds[0]) < 1e-6:
-            lower = self.radial_bounds[0]
-        if abs(upper - self.radial_bounds[1]) < 1e-6:
-            upper = self.radial_bounds[1]
-        return lower, upper
+        return self.fit_bounds
 
     def start(self, python, inputs, mapped, indices, filename):
         inputs.update(
