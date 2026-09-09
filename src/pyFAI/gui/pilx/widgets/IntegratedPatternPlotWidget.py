@@ -61,6 +61,9 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._sqrt_mode = False
         self._curve_y_data = {}
         self._data_y_label = ""
+        self._observed_color = PLOT_COLORS[0]
+        self._observed_marker_size = 4.5
+        self._observed_marker_edge_width = 0.8
         super().__init__(parent, backend)
         self.setDefaultColors(PLOT_COLORS)
         self.setDataMargins(0.02, 0.02, 0.02, 0.02)
@@ -119,14 +122,22 @@ class IntegratedPatternPlotWidget(PlotWidget):
             if not curve.isVisible():
                 continue
             label = curve.getName()
+            is_observed = label == "INTEGRATE"
             if label == "INTEGRATE":
                 label = "Observed"
             elif label.startswith("Rietveld: "):
                 label = label.removeprefix("Rietveld: ")
-            handles.append(Line2D(
+            handle = Line2D(
                 [], [], color=curve.getColor(), linestyle=curve.getLineStyle(),
+                marker=curve.getSymbol() or None,
+                markersize=curve.getSymbolSize(),
                 label=label,
-            ))
+            )
+            if is_observed and curve.getSymbol():
+                handle.set_markerfacecolor("white")
+                handle.set_markeredgecolor(curve.getColor())
+                handle.set_markeredgewidth(self._observed_marker_edge_width)
+            handles.append(handle)
         for overlay in self._reflection_overlays:
             if not (overlay["reflections"] or overlay.get("sticks", [])) or not (
                 overlay["show_ticks"] or overlay["show_lines"]
@@ -157,7 +168,19 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._curve_y_data[legend] = numpy.array(y, copy=True)
         if self._sqrt_mode:
             y = numpy.sign(y) * numpy.sqrt(numpy.abs(y))
-        return self.addCurve(x, y, legend=legend, **kwargs)
+        if legend == "INTEGRATE":
+            kwargs["color"] = self._observed_color
+            kwargs["linestyle"] = "-" if self._observed_lines.isChecked() else " "
+            kwargs["symbol"] = "o" if self._observed_circles.isChecked() else ""
+        curve = self.addCurve(x, y, legend=legend, **kwargs)
+        if legend == "INTEGRATE":
+            curve.setSymbolSize(self._observed_marker_size)
+            curve.setVisible(
+                self._observed_lines.isChecked()
+                or self._observed_circles.isChecked()
+            )
+            self._styleObservedCircles()
+        return curve
 
     def setDataYLabel(self, label):
         self._data_y_label = label
@@ -205,6 +228,27 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._y_scale_button.setIcon(icons.getQIcon("yscale-linear"))
         self._y_scale_button.setToolTip("Y-axis scale is linear")
         toolbar.addWidget(self._y_scale_button)
+
+        observed_button = qt.QToolButton(toolbar)
+        observed_button.setIcon(icons.getQIcon("plot-toggle-points"))
+        observed_button.setToolTip("Observed data display")
+        observed_button.setPopupMode(
+            qt.QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        observed_menu = qt.QMenu(observed_button)
+        self._observed_lines = observed_menu.addAction("Lines")
+        self._observed_lines.setCheckable(True)
+        self._observed_lines.setChecked(True)
+        self._observed_lines.triggered.connect(self._updateObservedStyle)
+        self._observed_circles = observed_menu.addAction("Circles")
+        self._observed_circles.setCheckable(True)
+        self._observed_circles.triggered.connect(self._updateObservedStyle)
+        observed_menu.addSeparator()
+        observed_color = observed_menu.addAction("Color…")
+        observed_color.triggered.connect(self._chooseObservedColor)
+        observed_button.setMenu(observed_menu)
+        toolbar.addWidget(observed_button)
+
         roiAction = RoiModeAction(self, self.roi, toolbar)
         toolbar.addAction(roiAction)
         # Start in ROI mode
@@ -232,6 +276,47 @@ class IntegratedPatternPlotWidget(PlotWidget):
         refinementAction.triggered.connect(self.refinementRequested)
         toolbar.addAction(refinementAction)
         return toolbar
+
+    def _updateObservedStyle(self, *args):
+        curve = self.getCurve("INTEGRATE")
+        if curve is None:
+            return
+        curve.setColor(self._observed_color)
+        curve.setLineStyle("-" if self._observed_lines.isChecked() else " ")
+        curve.setSymbol("o" if self._observed_circles.isChecked() else "")
+        curve.setSymbolSize(self._observed_marker_size)
+        curve.setVisible(
+            self._observed_lines.isChecked()
+            or self._observed_circles.isChecked()
+        )
+        self._styleObservedCircles()
+        self.scheduleLegendUpdate()
+
+    def _styleObservedCircles(self):
+        if not self._observed_circles.isChecked():
+            return
+        curve = self.getCurve("INTEGRATE")
+        if curve is None:
+            return
+        self.replot()
+        renderer = curve._backendRenderer
+        backend = self.getBackend()
+        if renderer is None or not hasattr(renderer, "get_children"):
+            return
+        for artist in renderer.get_children():
+            if hasattr(artist, "set_markerfacecolor"):
+                artist.set_markerfacecolor("white")
+                artist.set_markeredgecolor(self._observed_color)
+                artist.set_markeredgewidth(self._observed_marker_edge_width)
+        if hasattr(backend, "fig"):
+            backend.fig.canvas.draw_idle()
+
+    def _chooseObservedColor(self):
+        color = qt.QColorDialog.getColor(qt.QColor(self._observed_color), self)
+        if not color.isValid():
+            return
+        self._observed_color = color.name()
+        self._updateObservedStyle()
 
     def setReflectionOverlays(self, overlays):
         self._reflection_overlays = overlays
@@ -394,6 +479,7 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._y_scale_button.setIcon(icons.getQIcon(icon))
         self._y_scale_button.setToolTip(tooltip)
         self.resetZoom()
+        self._styleObservedCircles()
 
     def _initStatusBar(self):
         converters = (
