@@ -90,7 +90,7 @@ class ReflectionOverlayDialog(qt.QDialog):
             phase_colors.changed.connect(self.refreshPhaseColors)
         self.setWindowTitle("Expected reflections")
         self.setModal(False)
-        self.resize(600, 650)
+        self.resize(600, 800)
 
         from pymatgen.core import Lattice
         from pymatgen.core import Structure
@@ -99,12 +99,19 @@ class ReflectionOverlayDialog(qt.QDialog):
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
         from pymatgen.symmetry.groups import SpaceGroup, sg_symbol_from_int_number
 
+        from ....crystallography.eos import BirchMurnaghan, Murnaghan, Vinet
+
         self._Lattice = Lattice
         self._Structure = Structure
         self._XRDCalculator = XRDCalculator
         self._CifParser = CifParser
         self._SpaceGroup = SpaceGroup
         self._SpacegroupAnalyzer = SpacegroupAnalyzer
+        self._eos_classes = {
+            "Birch-Murnaghan": BirchMurnaghan,
+            "Vinet": Vinet,
+            "Murnaghan": Murnaghan,
+        }
         self._phases = []
         self._file_wavelength = None
         self._ttheta_range = (0.0, 90.0)
@@ -214,6 +221,57 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase_details = qt.QWidget(self)
         phase_details.setLayout(phase_form)
 
+        self._eos_model = qt.QComboBox(self)
+        self._eos_model.addItem("None", None)
+        self._eos_model.addItem("Birch–Murnaghan", "Birch-Murnaghan")
+        self._eos_model.addItem("Vinet", "Vinet")
+        self._eos_model.addItem("Murnaghan", "Murnaghan")
+        self._eos_model.currentIndexChanged.connect(self._eosSettingsChanged)
+        self._eos_pressure = ModifierDoubleSpinBox(self)
+        self._eos_pressure.setDecimals(4)
+        self._eos_pressure.setRange(-10000.0, 10000.0)
+        self._eos_pressure.setSingleStep(1.0)
+        self._eos_pressure.valueChanged.connect(self._eosSettingsChanged)
+        self._eos_k0 = ModifierDoubleSpinBox(self)
+        self._eos_k0.setDecimals(4)
+        self._eos_k0.setRange(0.0001, 1000000.0)
+        self._eos_k0.setSingleStep(10.0)
+        self._eos_k0.setValue(160.0)
+        self._eos_k0.valueChanged.connect(self._eosSettingsChanged)
+        self._eos_k0p = ModifierDoubleSpinBox(self)
+        self._eos_k0p.setDecimals(4)
+        self._eos_k0p.setRange(0.0001, 100.0)
+        self._eos_k0p.setSingleStep(0.1)
+        self._eos_k0p.setValue(4.0)
+        self._eos_k0p.valueChanged.connect(self._eosSettingsChanged)
+        self._eos_p0 = ModifierDoubleSpinBox(self)
+        self._eos_p0.setDecimals(4)
+        self._eos_p0.setRange(-10000.0, 10000.0)
+        self._eos_p0.setSingleStep(1.0)
+        self._eos_p0.valueChanged.connect(self._eosSettingsChanged)
+        self._load_jcpds = qt.QPushButton("Load JCPDS", self)
+        self._load_jcpds.setToolTip(
+            "Load the reference cell and equation of state from a JCPDS file"
+        )
+        self._load_jcpds.clicked.connect(self._loadJcpds)
+        self._apply_eos = qt.QPushButton("Apply EoS", self)
+        self._apply_eos.setToolTip(
+            "Apply isotropic EoS scaling relative to the phase reference cell"
+        )
+        self._apply_eos.clicked.connect(self._applyEquationOfState)
+        eos_form = qt.QFormLayout()
+        eos_form.addRow("Model", self._eos_model)
+        eos_form.addRow("Pressure [GPa]", self._eos_pressure)
+        eos_form.addRow("K₀ [GPa]", self._eos_k0)
+        eos_form.addRow("K₀′", self._eos_k0p)
+        eos_form.addRow("Reference pressure P₀ [GPa]", self._eos_p0)
+        eos_buttons = qt.QHBoxLayout()
+        eos_buttons.addWidget(self._load_jcpds, 1)
+        eos_buttons.addWidget(self._apply_eos, 1)
+        eos_form.addRow(eos_buttons)
+        eos_group = qt.QGroupBox("Equation of state", self)
+        eos_group.setLayout(eos_form)
+
         self._show_labels = qt.QCheckBox("Tick labels", self)
         self._show_labels.toggled.connect(self._labelsChanged)
         self._show_ticks = qt.QCheckBox("Ticks", self)
@@ -280,6 +338,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         layout.addWidget(self._phase_list, 1)
         layout.addLayout(phase_buttons)
         layout.addWidget(phase_details)
+        layout.addWidget(eos_group)
         layout.addWidget(visualization)
         layout.addWidget(self._message)
         self._setPhaseControlsEnabled(False)
@@ -412,6 +471,21 @@ class ReflectionOverlayDialog(qt.QDialog):
                 "labels_computed": False,
                 "dirty": True,
                 "warnings": phase_warnings,
+                "eos": {
+                    "model": None,
+                    "pressure": 0.0,
+                    "k0": 160.0,
+                    "k0p": 4.0,
+                    "p0": 0.0,
+                },
+                "eos_reference": {
+                    "a": lattice.a,
+                    "b": lattice.b,
+                    "c": lattice.c,
+                    "alpha": lattice.alpha,
+                    "beta": lattice.beta,
+                    "gamma": lattice.gamma,
+                },
             }
             phase["cif_state"] = {
                 key: phase[key]
@@ -467,6 +541,21 @@ class ReflectionOverlayDialog(qt.QDialog):
             "labels_computed": False,
             "dirty": True,
             "warnings": [],
+            "eos": {
+                "model": None,
+                "pressure": 0.0,
+                "k0": 160.0,
+                "k0p": 4.0,
+                "p0": 0.0,
+            },
+            "eos_reference": {
+                "a": 4.0,
+                "b": 4.0,
+                "c": 4.0,
+                "alpha": 90.0,
+                "beta": 90.0,
+                "gamma": 90.0,
+            },
         }
         self._appendPhase(phase)
         item = self._phase_list.topLevelItem(
@@ -538,7 +627,16 @@ class ReflectionOverlayDialog(qt.QDialog):
             self._space_group.setCurrentIndex(index)
             for parameter, edit in self._cell_edits.items():
                 edit.setValue(phase[parameter])
+            eos = phase["eos"]
+            self._eos_model.setCurrentIndex(
+                self._eos_model.findData(eos["model"])
+            )
+            self._eos_pressure.setValue(eos["pressure"])
+            self._eos_k0.setValue(eos["k0"])
+            self._eos_k0p.setValue(eos["k0p"])
+            self._eos_p0.setValue(eos["p0"])
             self._applyCellConstraints(phase)
+            self._updateEosControlsEnabled()
         finally:
             self._updating_controls = False
 
@@ -550,6 +648,146 @@ class ReflectionOverlayDialog(qt.QDialog):
         )
         for edit in self._cell_edits.values():
             edit.setEnabled(enabled)
+        self._eos_model.setEnabled(enabled)
+        self._load_jcpds.setEnabled(enabled)
+        self._updateEosControlsEnabled()
+
+    def _updateEosControlsEnabled(self):
+        enabled = self._phase_list.currentItem() is not None
+        model_enabled = enabled and self._eos_model.currentData() is not None
+        self._eos_pressure.setEnabled(model_enabled)
+        self._eos_k0.setEnabled(model_enabled)
+        self._eos_k0p.setEnabled(model_enabled)
+        self._eos_p0.setEnabled(model_enabled)
+        self._apply_eos.setEnabled(model_enabled)
+
+    def _eosSettingsChanged(self):
+        self._updateEosControlsEnabled()
+        if self._updating_controls:
+            return
+        item = self._phase_list.currentItem()
+        if item is None:
+            return
+        phase = self._phases[self._phase_list.indexOfTopLevelItem(item)]
+        model = self._eos_model.currentData()
+        if (
+            phase["source"] == "Manual"
+            and phase["eos"]["model"] is None
+            and model is not None
+        ):
+            phase["eos_reference"] = {
+                parameter: phase[parameter]
+                for parameter in ("a", "b", "c", "alpha", "beta", "gamma")
+            }
+        phase["eos"].update(
+            model=model,
+            pressure=self._eos_pressure.value(),
+            k0=self._eos_k0.value(),
+            k0p=self._eos_k0p.value(),
+            p0=self._eos_p0.value(),
+        )
+
+    def _applyEquationOfState(self):
+        item = self._phase_list.currentItem()
+        if item is None:
+            return
+        phase = self._phases[self._phase_list.indexOfTopLevelItem(item)]
+        settings = phase["eos"]
+        model = settings["model"]
+        if model is None:
+            return
+        try:
+            eos = self._eos_classes[model](
+                k0=settings["k0"],
+                k0p=settings["k0p"],
+                p0=settings["p0"],
+            )
+            ratio = eos.linear_ratio(pressure=settings["pressure"])
+            if not numpy.isfinite(ratio) or ratio <= 0.0:
+                raise ValueError(f"invalid linear cell ratio {ratio}")
+        except Exception as error:
+            self._message.setText(f"{phase['name']}: {error}")
+            return
+
+        reference = phase["eos_reference"]
+        values = {
+            "a": reference["a"] * ratio,
+            "b": reference["b"] * ratio,
+            "c": reference["c"] * ratio,
+            "alpha": reference["alpha"],
+            "beta": reference["beta"],
+            "gamma": reference["gamma"],
+        }
+        phase.update(values)
+        phase["dirty"] = True
+        self._updating_controls = True
+        for parameter, edit in self._cell_edits.items():
+            edit.setValue(values[parameter])
+        self._updating_controls = False
+        self._updateModifiedState(phase, item)
+        self._scheduleUpdate()
+
+    def _loadJcpds(self):
+        item = self._phase_list.currentItem()
+        if item is None:
+            return
+        phase = self._phases[self._phase_list.indexOfTopLevelItem(item)]
+        directory = str(Path(phase["path"]).parent) if phase["path"] else ""
+        filename, _ = qt.QFileDialog.getOpenFileName(
+            self,
+            "Load equation of state",
+            directory,
+            "JCPDS files (*.jcpds);;All files (*)",
+        )
+        if not filename:
+            return
+
+        try:
+            from ....io.calibrant_config import CalibrantConfig
+
+            config = CalibrantConfig.from_JCPDS(filename)
+            cell = config.to_cell()
+            if cell is None:
+                raise ValueError("JCPDS file does not contain a usable reference cell")
+            eos = config.eos
+            thermal_ignored = False
+            if hasattr(eos, "isothermal"):
+                eos = eos.isothermal
+                thermal_ignored = True
+            if eos is None or eos.name not in self._eos_classes:
+                raise ValueError(
+                    "JCPDS file does not contain a supported compression EoS"
+                )
+        except Exception as error:
+            self._message.setText(f"{Path(filename).name}: {error}")
+            return
+
+        phase["eos_reference"] = {
+            parameter: getattr(cell, parameter)
+            for parameter in ("a", "b", "c", "alpha", "beta", "gamma")
+        }
+        phase["eos"].update(
+            model=eos.name,
+            k0=eos.k0,
+            k0p=eos.k0p,
+            p0=eos.p0,
+        )
+        self._updating_controls = True
+        self._eos_model.setCurrentIndex(self._eos_model.findData(eos.name))
+        self._eos_k0.setValue(eos.k0)
+        self._eos_k0p.setValue(eos.k0p)
+        self._eos_p0.setValue(eos.p0)
+        self._updating_controls = False
+        self._updateEosControlsEnabled()
+        if thermal_ignored:
+            message = (
+                f"{Path(filename).name}: thermal EoS parameters are not yet "
+                "supported and were not loaded"
+            )
+            _logger.warning(message)
+            self._message.setText(message)
+        else:
+            self._message.clear()
 
     def _spaceGroupLockChanged(self, locked):
         self._space_group.setEnabled(
