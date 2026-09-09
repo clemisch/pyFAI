@@ -245,7 +245,7 @@ class RietveldRefinementDialog(qt.QDialog):
         )
         self._cifs.setMinimumHeight(100)
         self._cifs.filesDropped.connect(self.addCifPaths)
-        add_cifs = qt.QPushButton("Add CIFs…", self)
+        add_cifs = qt.QPushButton("Add CIF", self)
         add_cifs.clicked.connect(self._addCifs)
         remove_cifs = qt.QPushButton("Remove selected", self)
         remove_cifs.clicked.connect(self._removeSelectedCifs)

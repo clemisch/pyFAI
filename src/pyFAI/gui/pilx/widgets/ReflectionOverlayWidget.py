@@ -144,7 +144,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._phase_list.itemChanged.connect(self._phaseItemChanged)
         self._phase_list.currentItemChanged.connect(self._currentPhaseChanged)
 
-        add_cifs = qt.QPushButton("Add CIFs…", self)
+        add_cifs = qt.QPushButton("Add CIF", self)
         add_cifs.clicked.connect(self._addCifs)
         add_manual = qt.QPushButton("Add manual phase", self)
         add_manual.clicked.connect(self._addManualPhase)
@@ -158,7 +158,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._name = qt.QLineEdit(self)
         self._name.editingFinished.connect(self._phaseNameChanged)
         self._source = qt.QLineEdit(self)
-        self._source.setReadOnly(True)
+        self._source.setEnabled(False)
         self._space_group = qt.QComboBox(self)
         for number in range(1, 231):
             symbol = sg_symbol_from_int_number(number)
@@ -193,7 +193,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase_details = qt.QWidget(self)
         phase_details.setLayout(phase_form)
 
-        self._show_labels = qt.QCheckBox("hkl labels", self)
+        self._show_labels = qt.QCheckBox("Tick labels", self)
         self._show_labels.toggled.connect(self._labelsChanged)
         self._show_ticks = qt.QCheckBox("Ticks", self)
         self._show_ticks.setChecked(True)
@@ -209,13 +209,17 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._merge_tolerance.setValue(0.01)
         self._merge_tolerance.valueChanged.connect(self._emitOverlay)
         visualization_form = qt.QFormLayout()
-        visualization_form.addRow(self._show_labels)
-        visualization_form.addRow(self._show_ticks)
-        visualization_form.addRow(self._show_lines)
+        visibility = qt.QHBoxLayout()
+        visibility.addWidget(self._show_ticks)
+        visibility.addWidget(self._show_lines)
+        visibility.addWidget(self._show_labels)
+        visibility.addStretch()
+        visualization_form.addRow(visibility)
         grouping = qt.QHBoxLayout()
         grouping.addWidget(self._condense)
-        grouping.addSpacing(12)
+        grouping.addStretch()
         grouping.addWidget(qt.QLabel("tol [deg]", self))
+        grouping.setSpacing(4)
         grouping.addWidget(self._merge_tolerance)
         visualization_form.addRow(grouping)
         visualization = qt.QGroupBox("Display", self)
@@ -474,7 +478,6 @@ class ReflectionOverlayDialog(qt.QDialog):
 
     def _setPhaseControlsEnabled(self, enabled):
         self._name.setEnabled(enabled)
-        self._source.setEnabled(enabled)
         self._space_group.setEnabled(enabled)
         for edit in self._cell_edits.values():
             edit.setEnabled(enabled)
