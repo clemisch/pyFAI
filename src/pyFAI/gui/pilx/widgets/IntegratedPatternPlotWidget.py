@@ -205,10 +205,10 @@ class IntegratedPatternPlotWidget(PlotWidget):
         self._y_scale_button.setIcon(icons.getQIcon("yscale-linear"))
         self._y_scale_button.setToolTip("Y-axis scale is linear")
         toolbar.addWidget(self._y_scale_button)
-        roiAction = RoiModeAction(self, toolbar)
+        roiAction = RoiModeAction(self, self.roi, toolbar)
         toolbar.addAction(roiAction)
         # Start in ROI mode
-        roiAction._actionTriggered()
+        roiAction.trigger()
 
         toolbar.addSeparator()
         toolbar.addAction(SaveAction(self, toolbar))
