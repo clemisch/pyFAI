@@ -128,14 +128,19 @@ class IntegratedPatternPlotWidget(PlotWidget):
                 label=label,
             ))
         for overlay in self._reflection_overlays:
-            if not overlay["reflections"] or not (
+            if not (overlay["reflections"] or overlay.get("sticks", [])) or not (
                 overlay["show_ticks"] or overlay["show_lines"]
+                or overlay.get("show_sticks", False)
             ):
                 continue
             handles.append(Line2D(
                 [], [], color=overlay["color"],
                 linestyle="-" if overlay["show_lines"] else "none",
-                marker="|" if overlay["show_ticks"] else None,
+                marker=(
+                    "|"
+                    if overlay["show_ticks"] or overlay.get("show_sticks", False)
+                    else None
+                ),
                 markersize=8,
                 label=f"Reflections: {overlay['name']}",
             ))
@@ -257,7 +262,8 @@ class IntegratedPatternPlotWidget(PlotWidget):
 
             for row, overlay in enumerate(self._reflection_overlays):
                 reflections = overlay["reflections"]
-                if not reflections:
+                sticks = overlay.get("sticks", [])
+                if not reflections and not sticks:
                     continue
                 baseline_pixel = bottom - 7 - 19 * row
                 top_pixel = baseline_pixel - 8
@@ -294,6 +300,33 @@ class IntegratedPatternPlotWidget(PlotWidget):
                             selectable=False,
                         )
                         marker.setLineWidth(1.0)
+                        self._reflection_items.append((marker_legend, "marker"))
+
+                if overlay.get("show_sticks", False):
+                    stick_baseline_pixel = bottom - 7
+                    for index, stick in enumerate(sticks):
+                        stick_height = (
+                            height
+                            * overlay.get("stick_height", 35.0)
+                            / 100.0
+                            * stick["intensity"]
+                            / 100.0
+                        )
+                        center_pixel = stick_baseline_pixel - 0.5 * stick_height
+                        center = self.pixelToData(left, center_pixel)[1]
+                        symbol_size = (
+                            stick_height * 72.0 / self.getBackend().fig.dpi
+                        )
+                        marker_legend = f"{legend}: stick {index}"
+                        marker = self.addMarker(
+                            stick["position"],
+                            center,
+                            legend=marker_legend,
+                            color=overlay["color"],
+                            symbol="|",
+                            selectable=False,
+                        )
+                        marker.setSymbolSize(symbol_size)
                         self._reflection_items.append((marker_legend, "marker"))
 
                 if overlay["show_labels"]:

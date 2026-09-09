@@ -27,13 +27,18 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+import warnings
 
 import numpy
 from silx.gui import qt
 
 from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
 from .PlotColors import PLOT_COLORS
+
+
+_logger = logging.getLogger(__name__)
 
 
 class ReflectionPhaseList(qt.QTreeWidget):
@@ -88,11 +93,15 @@ class ReflectionOverlayDialog(qt.QDialog):
         self.resize(600, 650)
 
         from pymatgen.core import Lattice
+        from pymatgen.core import Structure
+        from pymatgen.analysis.diffraction.xrd import XRDCalculator
         from pymatgen.io.cif import CifParser
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
         from pymatgen.symmetry.groups import SpaceGroup, sg_symbol_from_int_number
 
         self._Lattice = Lattice
+        self._Structure = Structure
+        self._XRDCalculator = XRDCalculator
         self._CifParser = CifParser
         self._SpaceGroup = SpaceGroup
         self._SpacegroupAnalyzer = SpacegroupAnalyzer
@@ -164,6 +173,18 @@ class ReflectionOverlayDialog(qt.QDialog):
             symbol = sg_symbol_from_int_number(number)
             self._space_group.addItem(f"{number}: {symbol}", number)
         self._space_group.currentIndexChanged.connect(self._spaceGroupChanged)
+        self._space_group_lock = qt.QPushButton("Lock", self)
+        self._space_group_lock.setCheckable(True)
+        self._space_group_lock.setChecked(True)
+        self._space_group_lock.setToolTip(
+            "Changing a CIF space group converts it to a manual phase"
+        )
+        self._space_group_lock.toggled.connect(self._spaceGroupLockChanged)
+        self._space_group.setDisabled(True)
+        space_group_layout = qt.QHBoxLayout()
+        space_group_layout.setContentsMargins(0, 0, 0, 0)
+        space_group_layout.addWidget(self._space_group)
+        space_group_layout.addWidget(self._space_group_lock)
 
         self._cell_edits = {}
         for parameter in ("a", "b", "c", "alpha", "beta", "gamma"):
@@ -180,7 +201,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase_form = qt.QFormLayout()
         phase_form.addRow("Name", self._name)
         phase_form.addRow("Source", self._source)
-        phase_form.addRow("Space group", self._space_group)
+        phase_form.addRow("Space group", space_group_layout)
         for parameter, label in (
             ("a", "a [Å]"),
             ("b", "b [Å]"),
@@ -200,6 +221,22 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._show_ticks.toggled.connect(self._visualizationChanged)
         self._show_lines = qt.QCheckBox("Lines", self)
         self._show_lines.toggled.connect(self._visualizationChanged)
+        self._show_sticks = qt.QCheckBox("Intensity sticks", self)
+        self._show_sticks.toggled.connect(self._visualizationChanged)
+        self._stick_cutoff = ModifierDoubleSpinBox(self)
+        self._stick_cutoff.setDecimals(2)
+        self._stick_cutoff.setRange(0.0, 100.0)
+        self._stick_cutoff.setSingleStep(0.5)
+        self._stick_cutoff.setValue(1.0)
+        self._stick_cutoff.setEnabled(False)
+        self._stick_cutoff.valueChanged.connect(self._emitOverlay)
+        self._stick_height = ModifierDoubleSpinBox(self)
+        self._stick_height.setDecimals(0)
+        self._stick_height.setRange(1.0, 100.0)
+        self._stick_height.setSingleStep(5.0)
+        self._stick_height.setValue(35.0)
+        self._stick_height.setEnabled(False)
+        self._stick_height.valueChanged.connect(self._emitOverlay)
         self._condense = qt.QCheckBox("Group reflections", self)
         self._condense.setChecked(True)
         self._condense.toggled.connect(self._visualizationChanged)
@@ -215,6 +252,15 @@ class ReflectionOverlayDialog(qt.QDialog):
         visibility.addWidget(self._show_labels)
         visibility.addStretch()
         visualization_form.addRow(visibility)
+        sticks = qt.QHBoxLayout()
+        sticks.addWidget(self._show_sticks)
+        sticks.addStretch()
+        sticks.addWidget(qt.QLabel("cutoff [%]", self))
+        sticks.addWidget(self._stick_cutoff)
+        sticks.addWidget(qt.QLabel("Rel. height [%]", self))
+        sticks.addWidget(self._stick_height)
+        sticks.setSpacing(4)
+        visualization_form.addRow(sticks)
         grouping = qt.QHBoxLayout()
         grouping.addWidget(self._condense)
         grouping.addStretch()
@@ -295,6 +341,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase["dirty"] = True
         self._currentPhaseChanged(item, item)
         self._updateModifiedState(phase, item)
+        item.setText(1, phase["source"])
         item.setText(2, self._spaceGroupText(phase))
         if phase["visible"]:
             self._scheduleUpdate()
@@ -316,10 +363,12 @@ class ReflectionOverlayDialog(qt.QDialog):
             if path in existing:
                 continue
             try:
-                parser = self._CifParser(path)
-                structure = parser.parse_structures(
-                    primitive=False, check_occu=False
-                )[0]
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    parser = self._CifParser(
+                        path, occupancy_tolerance=float("inf")
+                    )
+                    structure = parser.parse_structures(primitive=False)[0]
                 analyzer = self._SpacegroupAnalyzer(structure)
                 space_group_number = analyzer.get_space_group_number()
                 space_group_symbol = analyzer.get_space_group_symbol()
@@ -327,6 +376,12 @@ class ReflectionOverlayDialog(qt.QDialog):
             except Exception as error:
                 errors.append(f"{Path(path).name}: {error}")
                 continue
+
+            phase_warnings = []
+            for message in parser.warnings:
+                if message not in phase_warnings:
+                    phase_warnings.append(message)
+                    _logger.warning("%s: %s", Path(path).name, message)
 
             phase = {
                 "name": Path(path).stem,
@@ -343,6 +398,7 @@ class ReflectionOverlayDialog(qt.QDialog):
                     and numpy.allclose(lattice.angles, lattice.alpha)
                     else "conventional"
                 ),
+                "structure": structure,
                 "a": lattice.a,
                 "b": lattice.b,
                 "c": lattice.c,
@@ -352,19 +408,27 @@ class ReflectionOverlayDialog(qt.QDialog):
                 "visible": False,
                 "color": self._COLORS[len(self._phases) % len(self._COLORS)],
                 "reflections": [],
+                "sticks": [],
                 "labels_computed": False,
                 "dirty": True,
+                "warnings": phase_warnings,
             }
             phase["cif_state"] = {
                 key: phase[key]
                 for key in (
-                    "name", "space_group_number", "space_group_symbol",
+                    "name", "source", "space_group_number", "space_group_symbol",
                     "crystal_system", "cell_mode", "a", "b", "c",
                     "alpha", "beta", "gamma",
                 )
             }
             self._appendPhase(phase)
             existing.add(path)
+
+        errors.extend(
+            f"{phase['name']}: {message}"
+            for phase in self._phases
+            for message in phase["warnings"]
+        )
 
         self._message.setText("\n".join(errors))
         self._emitOverlay()
@@ -399,8 +463,10 @@ class ReflectionOverlayDialog(qt.QDialog):
             "visible": False,
             "color": self._COLORS[len(self._phases) % len(self._COLORS)],
             "reflections": [],
+            "sticks": [],
             "labels_computed": False,
             "dirty": True,
+            "warnings": [],
         }
         self._appendPhase(phase)
         item = self._phase_list.topLevelItem(
@@ -466,7 +532,7 @@ class ReflectionOverlayDialog(qt.QDialog):
             self._setPhaseControlsEnabled(True)
             self._name.setText(phase["name"])
             self._source.setText(
-                phase["path"] if phase["path"] is not None else "Manual"
+                phase["path"] if phase["source"] == "CIF" else "Manual"
             )
             index = self._space_group.findData(phase["space_group_number"])
             self._space_group.setCurrentIndex(index)
@@ -478,9 +544,17 @@ class ReflectionOverlayDialog(qt.QDialog):
 
     def _setPhaseControlsEnabled(self, enabled):
         self._name.setEnabled(enabled)
-        self._space_group.setEnabled(enabled)
+        self._space_group_lock.setEnabled(enabled)
+        self._space_group.setEnabled(
+            enabled and not self._space_group_lock.isChecked()
+        )
         for edit in self._cell_edits.values():
             edit.setEnabled(enabled)
+
+    def _spaceGroupLockChanged(self, locked):
+        self._space_group.setEnabled(
+            self._phase_list.currentItem() is not None and not locked
+        )
 
     def _phaseNameChanged(self):
         if self._updating_controls:
@@ -513,9 +587,13 @@ class ReflectionOverlayDialog(qt.QDialog):
         phase["space_group"] = group
         phase["crystal_system"] = group.crystal_system
         phase["cell_mode"] = "conventional"
+        phase["source"] = "Manual"
+        phase["sticks"] = []
         phase["dirty"] = True
         self._updating_controls = True
+        item.setText(1, "Manual")
         item.setText(2, self._spaceGroupText(phase))
+        self._source.setText("Manual")
         self._applyCellConstraints(phase)
         self._updating_controls = False
         self._cellChanged()
@@ -600,7 +678,11 @@ class ReflectionOverlayDialog(qt.QDialog):
         wavelength = self._wavelength.value()
         minimum, maximum = self._ttheta_range
         maximum = min(maximum, 179.999999)
-        errors = []
+        errors = [
+            f"{phase['name']}: {message}"
+            for phase in self._phases
+            for message in phase["warnings"]
+        ]
 
         for phase in self._phases:
             if not phase["visible"] or not phase["dirty"]:
@@ -614,6 +696,25 @@ class ReflectionOverlayDialog(qt.QDialog):
                     phase["beta"],
                     phase["gamma"],
                 )
+                if self._show_sticks.isChecked() and phase["source"] == "CIF":
+                    original = phase["structure"]
+                    structure = self._Structure(
+                        lattice,
+                        [site.species for site in original],
+                        original.frac_coords,
+                        site_properties=original.site_properties,
+                    )
+                    pattern = self._XRDCalculator(wavelength=wavelength).get_pattern(
+                        structure,
+                        scaled=True,
+                        two_theta_range=(minimum, maximum),
+                    )
+                    phase["sticks"] = [
+                        {"position": float(position), "intensity": float(intensity)}
+                        for position, intensity in zip(pattern.x, pattern.y)
+                    ]
+                elif phase["source"] != "CIF":
+                    phase["sticks"] = []
                 group = phase["space_group"]
                 if group is None:
                     group_symbol = phase["space_group_symbol"]
@@ -729,6 +830,17 @@ class ReflectionOverlayDialog(qt.QDialog):
 
     def _visualizationChanged(self):
         self._merge_tolerance.setEnabled(self._condense.isChecked())
+        self._stick_cutoff.setEnabled(self._show_sticks.isChecked())
+        self._stick_height.setEnabled(self._show_sticks.isChecked())
+        if self.sender() is self._show_sticks and self._show_sticks.isChecked():
+            needs_update = False
+            for phase in self._phases:
+                if phase["visible"] and phase["source"] == "CIF":
+                    phase["dirty"] = True
+                    needs_update = True
+            if needs_update:
+                self._scheduleUpdate()
+                return
         self._emitOverlay()
 
     def _labelsChanged(self, visible):
@@ -754,6 +866,11 @@ class ReflectionOverlayDialog(qt.QDialog):
             minimum, maximum = self._ttheta_range
             reflections = [entry for entry in phase["reflections"]
                            if minimum <= entry["position"] <= maximum]
+            sticks = [
+                entry for entry in phase["sticks"]
+                if minimum <= entry["position"] <= maximum
+                and entry["intensity"] >= self._stick_cutoff.value()
+            ]
             if self._condense.isChecked() and reflections:
                 condensed = []
                 current = [reflections[0]]
@@ -793,9 +910,12 @@ class ReflectionOverlayDialog(qt.QDialog):
                     "name": phase["name"],
                     "color": phase["color"],
                     "reflections": reflections,
+                    "sticks": sticks,
                     "show_labels": self._show_labels.isChecked(),
                     "show_ticks": self._show_ticks.isChecked(),
                     "show_lines": self._show_lines.isChecked(),
+                    "show_sticks": self._show_sticks.isChecked(),
+                    "stick_height": self._stick_height.value(),
                 }
             )
         self.overlayChanged.emit(overlays)
