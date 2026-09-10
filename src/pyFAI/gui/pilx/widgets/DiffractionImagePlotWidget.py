@@ -36,6 +36,7 @@ __date__ = "06/01/2026"
 __status__ = "development"
 
 import numpy
+from silx.gui import qt
 from silx.gui.plot.actions import PlotAction
 from silx.gui.plot.backends.BackendMatplotlib import BackendMatplotlibQt
 from silx.gui.plot.items import ImageData
@@ -103,6 +104,7 @@ class DiffractionImagePlotWidget(ImagePlotWidget):
             raise RuntimeError("addImage should return a ImageData instance")
         self._image_item = image_item
         self._first_plot = True
+        self._reset_zoom_when_shown = False
 
     def emitMouseClickSignal(self, signal_data):
         if (
@@ -125,12 +127,21 @@ class DiffractionImagePlotWidget(ImagePlotWidget):
                      title: str=""):
         self._image_item.setData(image)
         if self._first_plot:
-            self.resetZoom()
+            if self.isVisible():
+                qt.QTimer.singleShot(0, self.resetZoom)
+            else:
+                self._reset_zoom_when_shown = True
             self._first_plot = False
         self.setGraphTitle(title)
         backend = self.getBackend()
         if hasattr(backend, "ax"):
             backend.ax.title.set_fontsize(11)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._reset_zoom_when_shown:
+            self._reset_zoom_when_shown = False
+            qt.QTimer.singleShot(0, self.resetZoom)
 
     def getImageIndices(self, x_data: float, y_data: float) -> ImageIndices | None:
         tmp = self.dataToPixel(x_data, y_data)
