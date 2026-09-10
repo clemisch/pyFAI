@@ -32,6 +32,7 @@ import traceback
 from math import degrees
 from pathlib import Path
 
+import numpy
 from silx.gui import qt
 
 from .ModifierDoubleSpinBox import ModifierDoubleSpinBox
@@ -55,6 +56,42 @@ class PhaseColors(qt.QObject):
     def set(self, path, color):
         self.colors[str(Path(path).resolve())] = color
         self.changed.emit()
+
+
+class PhaseEosSettings(qt.QObject):
+    """Equation-of-state settings shared by CIF path across GUI tools."""
+
+    changed = qt.Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._settings = {}
+
+    def get(self, path, reference=None):
+        key = str(Path(path).resolve())
+        if key not in self._settings:
+            self._settings[key] = {
+                "eos": {
+                    "model": None,
+                    "pressure": 0.0,
+                    "k0": 160.0,
+                    "k0p": 4.0,
+                    "p0": 0.0,
+                },
+                "reference": reference,
+                "revision": 0,
+            }
+        elif self._settings[key]["reference"] is None and reference is not None:
+            self._settings[key]["reference"] = reference
+        return self._settings[key]
+
+    def notifyChanged(self, path):
+        key = str(Path(path).resolve())
+        settings = self._settings.get(key)
+        if settings is None:
+            return
+        settings["revision"] += 1
+        self.changed.emit(key)
 
 
 class RietveldRefinementThread(qt.QThread):
@@ -193,8 +230,9 @@ class RietveldRefinementDialog(qt.QDialog):
     refinementRequested = qt.Signal()
     mapRefinementRequested = qt.Signal()
     mapRequested = qt.Signal(str, object)
+    mapUpdated = qt.Signal(str, object)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, phase_eos=None):
         super().__init__(parent)
         self.setWindowTitle("Rietveld refinement")
         self.setModal(False)
@@ -225,6 +263,20 @@ class RietveldRefinementDialog(qt.QDialog):
         wavelength_widget.setLayout(wavelength_layout)
 
         self._ttheta_range = (0.0, 180.0)
+        self.phase_eos = (
+            phase_eos if phase_eos is not None else PhaseEosSettings(self)
+        )
+        self.phase_eos.changed.connect(self._eosChanged)
+        self._phase_paths = {}
+        self._result = None
+        self._result_flags = None
+        self._result_indices = None
+        self._derived_maps = {}
+        self._mapped_result = None
+        self._mapped_flags = None
+        self._mapped_indices = None
+        self._mapped_phase_paths = {}
+        self._pressure_cache = {}
 
         form = qt.QFormLayout()
         form.addRow("Wavelength [Å]", wavelength_widget)
@@ -441,9 +493,32 @@ class RietveldRefinementDialog(qt.QDialog):
             self.mapRequested.emit(title, map_data)
 
     def clearResult(self):
+        self._result = None
+        self._result_flags = None
+        self._result_indices = None
+        self._derived_maps.clear()
+        self._mapped_result = None
+        self._mapped_flags = None
+        self._mapped_indices = None
+        self._mapped_phase_paths = {}
+        self._pressure_cache.clear()
         self._parameters.clear()
 
+    def setPhasePaths(self, paths):
+        self._phase_paths = {
+            phase: str(Path(path).resolve()) for phase, path in paths.items()
+        }
+
     def setResult(self, result, flags, indices=None):
+        self._result = result
+        self._result_flags = flags
+        self._result_indices = indices
+        if "stages" in result:
+            self._mapped_result = result
+            self._mapped_flags = flags
+            self._mapped_indices = indices
+            self._mapped_phase_paths = dict(self._phase_paths)
+        self._derived_maps.clear()
         self._parameters.clear()
         if indices is None:
             history = result["history"][-1]
@@ -566,6 +641,77 @@ class RietveldRefinementDialog(qt.QDialog):
                             qt.Qt.ItemDataRole.UserRole,
                             value * degrees(1.0),
                         )
+
+                volume = phase_values.get("cell_vol_A3")
+                if volume is not None:
+                    display_volume = volume if map_index is None else volume[map_index]
+                    item = qt.QTreeWidgetItem(
+                        phase_item,
+                        ["Volume [Å³]", f"{display_volume:.7g}", ""],
+                    )
+                    if map_index is not None:
+                        item.setData(0, qt.Qt.ItemDataRole.UserRole, volume)
+                        self._derived_maps[f"{phase}: Volume"] = volume
+
+                    path = self._phase_paths.get(phase)
+                    eos_settings = (
+                        None if path is None else self.phase_eos.get(path)
+                    )
+                    if (
+                        eos_settings is not None
+                        and eos_settings["eos"]["model"] is not None
+                        and eos_settings["reference"] is not None
+                    ):
+                        from ....crystallography.cell import Cell
+                        from ....crystallography.eos import EquationOfState
+
+                        reference = eos_settings["reference"]
+                        reference_volume = Cell(**reference).volume
+                        settings = eos_settings["eos"]
+                        eos = EquationOfState.factory(
+                            settings["model"],
+                            k0=settings["k0"],
+                            k0p=settings["k0p"],
+                            p0=settings["p0"],
+                            v0=reference_volume,
+                        )
+                        cached = self._pressure_cache.get(phase)
+                        if (
+                            map_index is not None
+                            and cached is not None
+                            and cached[0] is result
+                            and cached[1] == eos_settings["revision"]
+                        ):
+                            pressure = cached[2]
+                        else:
+                            volume_array = numpy.asarray(volume)
+                            pressure = numpy.full(volume_array.shape, numpy.nan)
+                            valid = numpy.isfinite(volume_array) & (volume_array > 0.0)
+                            for index in numpy.flatnonzero(valid):
+                                try:
+                                    pressure.flat[index] = eos.pressure(
+                                        volume=volume_array.flat[index]
+                                    )
+                                except (OverflowError, ValueError, ZeroDivisionError):
+                                    pass
+                            if volume_array.ndim == 0:
+                                pressure = pressure.item()
+                            if map_index is not None:
+                                self._pressure_cache[phase] = (
+                                    result,
+                                    eos_settings["revision"],
+                                    pressure,
+                                )
+                        display_pressure = (
+                            pressure if map_index is None else pressure[map_index]
+                        )
+                        item = qt.QTreeWidgetItem(
+                            phase_item,
+                            ["Pressure [GPa]", f"{display_pressure:.7g}", ""],
+                        )
+                        if map_index is not None:
+                            item.setData(0, qt.Qt.ItemDataRole.UserRole, pressure)
+                            self._derived_maps[f"{phase}: Pressure"] = pressure
             if flags["peak_width"]:
                 for parameter, label in (("W", "W [rad²]"), ("Eta0", "Eta0")):
                     value = phase_values[parameter]
@@ -589,3 +735,40 @@ class RietveldRefinementDialog(qt.QDialog):
 
         self._parameters.expandAll()
         self._parameters.resizeColumnToContents(0)
+
+    def _eosChanged(self, path):
+        phase_paths = (
+            self._mapped_phase_paths
+            if self._mapped_result is not None
+            else self._phase_paths
+        )
+        if self._result is None or path not in phase_paths.values():
+            return
+        current_result = self._result
+        current_flags = self._result_flags
+        current_indices = self._result_indices
+        current_phase_paths = self._phase_paths
+        affected_phases = [
+            phase for phase, phase_path in phase_paths.items()
+            if phase_path == path
+        ]
+        if self._mapped_result is not None:
+            result = self._mapped_result
+            flags = self._mapped_flags
+            indices = self._mapped_indices
+            self._phase_paths = self._mapped_phase_paths
+        else:
+            result = current_result
+            flags = current_flags
+            indices = current_indices
+        self.setResult(
+            result,
+            flags,
+            indices=indices,
+        )
+        for phase in affected_phases:
+            title = f"{phase}: Pressure"
+            self.mapUpdated.emit(title, self._derived_maps.get(title))
+        if current_result is not result:
+            self._phase_paths = current_phase_paths
+            self.setResult(current_result, current_flags, indices=current_indices)

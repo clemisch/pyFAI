@@ -83,9 +83,10 @@ class ReflectionOverlayDialog(qt.QDialog):
 
     _COLORS = PLOT_COLORS[1:]
 
-    def __init__(self, parent=None, phase_colors=None):
+    def __init__(self, parent=None, phase_colors=None, phase_eos=None):
         super().__init__(parent)
         self.phase_colors = phase_colors
+        self.phase_eos = phase_eos
         if phase_colors is not None:
             phase_colors.changed.connect(self.refreshPhaseColors)
         self.setWindowTitle("Expected reflections")
@@ -442,6 +443,19 @@ class ReflectionOverlayDialog(qt.QDialog):
                     phase_warnings.append(message)
                     _logger.warning("%s: %s", Path(path).name, message)
 
+            eos_reference = {
+                "a": lattice.a,
+                "b": lattice.b,
+                "c": lattice.c,
+                "alpha": lattice.alpha,
+                "beta": lattice.beta,
+                "gamma": lattice.gamma,
+            }
+            shared_eos = (
+                None
+                if self.phase_eos is None
+                else self.phase_eos.get(path, reference=eos_reference)
+            )
             phase = {
                 "name": Path(path).stem,
                 "path": path,
@@ -471,21 +485,22 @@ class ReflectionOverlayDialog(qt.QDialog):
                 "labels_computed": False,
                 "dirty": True,
                 "warnings": phase_warnings,
-                "eos": {
-                    "model": None,
-                    "pressure": 0.0,
-                    "k0": 160.0,
-                    "k0p": 4.0,
-                    "p0": 0.0,
-                },
-                "eos_reference": {
-                    "a": lattice.a,
-                    "b": lattice.b,
-                    "c": lattice.c,
-                    "alpha": lattice.alpha,
-                    "beta": lattice.beta,
-                    "gamma": lattice.gamma,
-                },
+                "eos": (
+                    shared_eos["eos"]
+                    if shared_eos is not None
+                    else {
+                        "model": None,
+                        "pressure": 0.0,
+                        "k0": 160.0,
+                        "k0p": 4.0,
+                        "p0": 0.0,
+                    }
+                ),
+                "eos_reference": (
+                    shared_eos["reference"]
+                    if shared_eos is not None
+                    else eos_reference
+                ),
             }
             phase["cif_state"] = {
                 key: phase[key]
@@ -679,6 +694,12 @@ class ReflectionOverlayDialog(qt.QDialog):
                 parameter: phase[parameter]
                 for parameter in ("a", "b", "c", "alpha", "beta", "gamma")
             }
+        previous_inverse_settings = (
+            phase["eos"]["model"],
+            phase["eos"]["k0"],
+            phase["eos"]["k0p"],
+            phase["eos"]["p0"],
+        )
         phase["eos"].update(
             model=model,
             pressure=self._eos_pressure.value(),
@@ -686,6 +707,18 @@ class ReflectionOverlayDialog(qt.QDialog):
             k0p=self._eos_k0p.value(),
             p0=self._eos_p0.value(),
         )
+        inverse_settings = (
+            phase["eos"]["model"],
+            phase["eos"]["k0"],
+            phase["eos"]["k0p"],
+            phase["eos"]["p0"],
+        )
+        if (
+            phase["path"] is not None
+            and self.phase_eos is not None
+            and inverse_settings != previous_inverse_settings
+        ):
+            self.phase_eos.notifyChanged(phase["path"])
 
     def _applyEquationOfState(self):
         item = self._phase_list.currentItem()
@@ -762,10 +795,16 @@ class ReflectionOverlayDialog(qt.QDialog):
             self._message.setText(f"{Path(filename).name}: {error}")
             return
 
-        phase["eos_reference"] = {
+        reference = {
             parameter: getattr(cell, parameter)
             for parameter in ("a", "b", "c", "alpha", "beta", "gamma")
         }
+        if phase["path"] is not None and self.phase_eos is not None:
+            shared_eos = self.phase_eos.get(phase["path"])
+            shared_eos["reference"] = reference
+            phase["eos_reference"] = shared_eos["reference"]
+        else:
+            phase["eos_reference"] = reference
         phase["eos"].update(
             model=eos.name,
             k0=eos.k0,
@@ -779,6 +818,8 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._eos_p0.setValue(eos.p0)
         self._updating_controls = False
         self._updateEosControlsEnabled()
+        if phase["path"] is not None and self.phase_eos is not None:
+            self.phase_eos.notifyChanged(phase["path"])
         if thermal_ignored:
             message = (
                 f"{Path(filename).name}: thermal EoS parameters are not yet "

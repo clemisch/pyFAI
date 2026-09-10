@@ -71,6 +71,7 @@ from .widgets.BackgroundWidget import BackgroundDialog
 from .widgets.ReflectionOverlayWidget import ReflectionOverlayDialog
 from .widgets.PlotColors import PLOT_COLORS
 from .widgets.RietveldRefinementWidget import (
+    PhaseEosSettings,
     RietveldRefinementDialog,
     RietveldRefinementProcess,
     RietveldRefinementThread,
@@ -122,7 +123,10 @@ class MainWindow(qt.QMainWindow):
         self._integrated_plot_widget.roi.sigRangeCommitted.connect(self.drawContoursOnImage)
         self._integrated_plot_widget.fit_roi.sigRegionChanged.connect(self.updateFitBounds)
 
-        self._refinement_widget = RietveldRefinementDialog(self)
+        self._phase_eos = PhaseEosSettings(self)
+        self._refinement_widget = RietveldRefinementDialog(
+            self, phase_eos=self._phase_eos
+        )
         self._rietveld_phase_paths = {}
         self._point_refinements = {}
         self._preview_generation = 0
@@ -139,6 +143,7 @@ class MainWindow(qt.QMainWindow):
             self.runRietveldMapRefinement
         )
         self._refinement_widget.mapRequested.connect(self.showRietveldMap)
+        self._refinement_widget.mapUpdated.connect(self.updateRietveldMap)
         self._integrated_plot_widget.refinementRequested.connect(
             self.showRietveldRefinement
         )
@@ -265,6 +270,9 @@ class MainWindow(qt.QMainWindow):
         self._file_name = os.path.abspath(file_name)
         self._mapped_refinement_result = None
         self._mapped_refinement_flags = None
+        self._rietveld_phase_paths = {}
+        self._refinement_widget.setPhasePaths({})
+        self._refinement_widget.clearResult()
         while self._map_tab_widget.count() > 1:
             self.removeMapTab(1)
         self._dataset_paths = {}
@@ -872,7 +880,9 @@ class MainWindow(qt.QMainWindow):
         if self._reflection_widget is None:
             try:
                 self._reflection_widget = ReflectionOverlayDialog(
-                    self, phase_colors=self._refinement_widget.phase_colors
+                    self,
+                    phase_colors=self._refinement_widget.phase_colors,
+                    phase_eos=self._phase_eos,
                 )
             except ImportError:
                 self.warning(
@@ -1024,6 +1034,7 @@ class MainWindow(qt.QMainWindow):
         self._rietveld_phase_paths = {
             os.path.splitext(os.path.basename(path))[0]: path for path in inputs["cifs"]
         }
+        self._refinement_widget.setPhasePaths(self._rietveld_phase_paths)
         self._refinement_thread.phase_paths = dict(self._rietveld_phase_paths)
         self._refinement_thread.preview_generation = self._preview_generation
         self._refinement_thread.finished.connect(
@@ -1064,6 +1075,10 @@ class MainWindow(qt.QMainWindow):
             flags,
             parent=self,
         )
+        self._refinement_process.phase_paths = {
+            os.path.splitext(os.path.basename(path))[0]: path
+            for path in inputs["cifs"]
+        }
         self._refinement_process.completed.connect(
             self.onRietveldMapRefinementFinished
         )
@@ -1098,6 +1113,7 @@ class MainWindow(qt.QMainWindow):
         cached = self._point_refinements.get(self._unfixed_indices)
         if cached is not None:
             result, flags, self._rietveld_phase_paths = cached
+            self._refinement_widget.setPhasePaths(self._rietveld_phase_paths)
             self._refinement_widget.setResult(result, flags)
         else:
             return
@@ -1168,6 +1184,8 @@ class MainWindow(qt.QMainWindow):
                 self._map_tab_widget.setTabText(index, title + "*")
         self._mapped_refinement_result = process.result
         self._mapped_refinement_flags = process.refinement_flags
+        self._rietveld_phase_paths = process.phase_paths
+        self._refinement_widget.setPhasePaths(self._rietveld_phase_paths)
         self._refinement_widget.setResult(
             process.result,
             process.refinement_flags,
@@ -1179,12 +1197,20 @@ class MainWindow(qt.QMainWindow):
         process.deleteLater()
 
     def showRietveldMap(self, title, map_data):
+        axes = self._mapped_refinement_result["axes"]
         for index in range(1, self._map_tab_widget.count()):
-            if self._map_tab_widget.tabText(index) == title:
+            if self._map_tab_widget.tabText(index).removesuffix("*") == title:
+                self._map_tab_widget.widget(index).setScatterData(
+                    numpy.asarray(map_data),
+                    x=numpy.asarray(axes[1]["values"]),
+                    y=numpy.asarray(axes[0]["values"]),
+                    xlabel=axes[1]["label"],
+                    ylabel=axes[0]["label"],
+                )
+                self._map_tab_widget.setTabText(index, title)
                 self._map_tab_widget.setCurrentIndex(index)
                 return
 
-        axes = self._mapped_refinement_result["axes"]
         self.addMapTab(
             title,
             numpy.asarray(map_data),
@@ -1193,6 +1219,18 @@ class MainWindow(qt.QMainWindow):
             xlabel=axes[1]["label"],
             ylabel=axes[0]["label"],
         )
+
+    def updateRietveldMap(self, title, map_data):
+        for index in range(1, self._map_tab_widget.count()):
+            if self._map_tab_widget.tabText(index).removesuffix("*") == title:
+                if map_data is None:
+                    self._map_tab_widget.setTabText(index, title + "*")
+                    return
+                self._map_tab_widget.widget(index).setScatterData(
+                    numpy.asarray(map_data)
+                )
+                self._map_tab_widget.setTabText(index, title)
+                return
 
     def closeEvent(self, event):
         self._preview_timer.stop()
