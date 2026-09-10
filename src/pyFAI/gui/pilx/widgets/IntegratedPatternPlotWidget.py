@@ -59,6 +59,7 @@ class IntegratedPatternPlotWidget(PlotWidget):
     rgbRoiChanged = qt.Signal()
     roiModeChanged = qt.Signal(str)
     activeRoiChanged = qt.Signal()
+    rgbChannelChanged = qt.Signal(str)
 
     def __init__(self, parent=None, backend=None):
         self._sqrt_mode = False
@@ -629,6 +630,7 @@ class IntegratedPatternPlotWidget(PlotWidget):
             self._roi_action.setRois(list(self.rgb_rois.values()), self.activeRoi())
             self.updateRoiRangeWidget()
             self.activeRoiChanged.emit()
+            self.rgbChannelChanged.emit(channel)
 
     def updateFitRangeWidget(self):
         self._fit_range.setRange(*self.fit_roi.getRange())
