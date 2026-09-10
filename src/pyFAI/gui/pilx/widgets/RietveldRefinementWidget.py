@@ -317,7 +317,7 @@ class RietveldRefinementDialog(qt.QDialog):
         self._refine_displacement.setChecked(True)
         self._refine_unit_cell = qt.QCheckBox("Unit cells", self)
         self._refine_unit_cell.setChecked(True)
-        self._refine_peak_width = qt.QCheckBox("Peak width W and Eta0", self)
+        self._refine_peak_width = qt.QCheckBox("FWHM W & Shape Eta0", self)
         self._refine_peak_width.setChecked(True)
 
         parameters = qt.QGroupBox("Refine", self)
@@ -528,15 +528,26 @@ class RietveldRefinementDialog(qt.QDialog):
             map_index = (indices.row, indices.col)
         values = history["ref"]
         uncertainties = history["ref_std"]
+        mapped_history = (
+            None
+            if self._mapped_result is None
+            else self._mapped_result["stages"][-1]
+        )
+        mapped_values = (
+            None if mapped_history is None else mapped_history["ref"]
+        )
 
         histogram = qt.QTreeWidgetItem(self._parameters, ["Histogram"])
         rwp = history["Rw"] if map_index is None else history["Rw"][map_index]
         rwp_item = qt.QTreeWidgetItem(
             histogram, ["Rwp [%]", f"{rwp:.7g}", ""]
         )
-        if map_index is not None:
+        if map_index is not None or mapped_history is not None:
+            map_data = (
+                history["Rw"] if map_index is not None else mapped_history["Rw"]
+            )
             rwp_item.setData(
-                0, qt.Qt.ItemDataRole.UserRole, history["Rw"]
+                0, qt.Qt.ItemDataRole.UserRole, map_data
             )
         if "Rw_net" in history:
             rwp_net = (
@@ -548,9 +559,16 @@ class RietveldRefinementDialog(qt.QDialog):
                 histogram,
                 ["Rwp (no bkg) [%]", f"{rwp_net:.7g}", ""],
             )
-            if map_index is not None:
+            if map_index is not None or (
+                mapped_history is not None and "Rw_net" in mapped_history
+            ):
+                map_data = (
+                    history["Rw_net"]
+                    if map_index is not None
+                    else mapped_history["Rw_net"]
+                )
                 rwp_net_item.setData(
-                    0, qt.Qt.ItemDataRole.UserRole, history["Rw_net"]
+                    0, qt.Qt.ItemDataRole.UserRole, map_data
                 )
         if flags["displacement"]:
             value = values["pp"]["2ThetaFlatDetDispRatio"]
@@ -569,12 +587,25 @@ class RietveldRefinementDialog(qt.QDialog):
                     f"{display_uncertainty:.3g}",
                 ],
             )
-            if map_index is not None:
-                item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
+            if map_index is not None or (
+                mapped_values is not None
+                and self._mapped_flags["displacement"]
+            ):
+                map_data = (
+                    value
+                    if map_index is not None
+                    else mapped_values["pp"]["2ThetaFlatDetDispRatio"]
+                )
+                item.setData(0, qt.Qt.ItemDataRole.UserRole, map_data)
 
         for phase, phase_values in values["phases"].items():
             phase_item = qt.QTreeWidgetItem(self._parameters, [phase])
             phase_uncertainties = uncertainties["phases"][phase]
+            mapped_phase_values = (
+                None
+                if mapped_values is None
+                else mapped_values["phases"].get(phase)
+            )
             if flags["scale"]:
                 value = values["scales"][phase]
                 uncertainty = uncertainties["scales"][phase]
@@ -592,8 +623,16 @@ class RietveldRefinementDialog(qt.QDialog):
                         f"{display_uncertainty:.3g}",
                     ],
                 )
-                if map_index is not None:
-                    item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
+                if map_index is not None or (
+                    mapped_phase_values is not None
+                    and self._mapped_flags["scale"]
+                ):
+                    map_data = (
+                        value
+                        if map_index is not None
+                        else mapped_values["scales"][phase]
+                    )
+                    item.setData(0, qt.Qt.ItemDataRole.UserRole, map_data)
             if flags["unit_cell"]:
                 for parameter in ("a", "b", "c"):
                     value = phase_values[parameter]
@@ -612,8 +651,16 @@ class RietveldRefinementDialog(qt.QDialog):
                             f"{display_uncertainty:.3g}",
                         ],
                     )
-                    if map_index is not None:
-                        item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
+                    if map_index is not None or (
+                        mapped_phase_values is not None
+                        and self._mapped_flags["unit_cell"]
+                    ):
+                        map_data = (
+                            value
+                            if map_index is not None
+                            else mapped_phase_values[parameter]
+                        )
+                        item.setData(0, qt.Qt.ItemDataRole.UserRole, map_data)
                 for parameter, label in (
                     ("alpha", "α"),
                     ("beta", "β"),
@@ -635,11 +682,19 @@ class RietveldRefinementDialog(qt.QDialog):
                             f"{degrees(display_uncertainty):.3g}",
                         ],
                     )
-                    if map_index is not None:
+                    if map_index is not None or (
+                        mapped_phase_values is not None
+                        and self._mapped_flags["unit_cell"]
+                    ):
+                        map_data = (
+                            value
+                            if map_index is not None
+                            else mapped_phase_values[parameter]
+                        )
                         item.setData(
                             0,
                             qt.Qt.ItemDataRole.UserRole,
-                            value * degrees(1.0),
+                            map_data * degrees(1.0),
                         )
 
                 volume = phase_values.get("cell_vol_A3")
@@ -649,8 +704,17 @@ class RietveldRefinementDialog(qt.QDialog):
                         phase_item,
                         ["Volume [Å³]", f"{display_volume:.7g}", ""],
                     )
+                    if map_index is not None or (
+                        mapped_phase_values is not None
+                        and self._mapped_flags["unit_cell"]
+                    ):
+                        map_data = (
+                            volume
+                            if map_index is not None
+                            else mapped_phase_values["cell_vol_A3"]
+                        )
+                        item.setData(0, qt.Qt.ItemDataRole.UserRole, map_data)
                     if map_index is not None:
-                        item.setData(0, qt.Qt.ItemDataRole.UserRole, volume)
                         self._derived_maps[f"{phase}: Volume"] = volume
 
                     path = self._phase_paths.get(phase)
@@ -712,6 +776,16 @@ class RietveldRefinementDialog(qt.QDialog):
                         if map_index is not None:
                             item.setData(0, qt.Qt.ItemDataRole.UserRole, pressure)
                             self._derived_maps[f"{phase}: Pressure"] = pressure
+                        elif (
+                            mapped_phase_values is not None
+                            and self._mapped_flags["unit_cell"]
+                            and cached is not None
+                            and cached[0] is self._mapped_result
+                            and cached[1] == eos_settings["revision"]
+                        ):
+                            item.setData(
+                                0, qt.Qt.ItemDataRole.UserRole, cached[2]
+                            )
             if flags["peak_width"]:
                 for parameter, label in (("W", "W [rad²]"), ("Eta0", "Eta0")):
                     value = phase_values[parameter]
@@ -730,8 +804,16 @@ class RietveldRefinementDialog(qt.QDialog):
                             f"{display_uncertainty:.3g}",
                         ],
                     )
-                    if map_index is not None:
-                        item.setData(0, qt.Qt.ItemDataRole.UserRole, value)
+                    if map_index is not None or (
+                        mapped_phase_values is not None
+                        and self._mapped_flags["peak_width"]
+                    ):
+                        map_data = (
+                            value
+                            if map_index is not None
+                            else mapped_phase_values[parameter]
+                        )
+                        item.setData(0, qt.Qt.ItemDataRole.UserRole, map_data)
 
         self._parameters.expandAll()
         self._parameters.resizeColumnToContents(0)
