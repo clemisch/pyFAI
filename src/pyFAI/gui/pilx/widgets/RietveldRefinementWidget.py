@@ -318,7 +318,7 @@ class RietveldRefinementDialog(qt.QDialog):
         self._refine_displacement.setChecked(True)
         self._refine_unit_cell = qt.QCheckBox("Unit cells", self)
         self._refine_unit_cell.setChecked(True)
-        self._refine_peak_width = qt.QCheckBox("FWHM W & Shape Eta0", self)
+        self._refine_peak_width = qt.QCheckBox("FWHM W, Shape Eta0", self)
         self._refine_peak_width.setChecked(True)
 
         parameters = qt.QGroupBox("Refine", self)
