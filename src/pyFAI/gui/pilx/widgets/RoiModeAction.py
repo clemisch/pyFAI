@@ -38,12 +38,12 @@ from silx.gui.plot import PlotWidget
 from silx.gui.plot.actions import PlotAction
 
 from ..HorizontalRangeROI import HorizontalRangeROI
-from ..models import ROI_COLOR
 
 
 class RoiModeAction(PlotAction):
     def __init__(self, plot: PlotWidget, roi: HorizontalRangeROI, parent=None):
         self.roi = roi
+        self.rois = [roi]
         super().__init__(
             plot,
             icon=HorizontalRangeROI.ICON,
@@ -64,14 +64,30 @@ class RoiModeAction(PlotAction):
         old = self.blockSignals(True)
         self.setChecked(active)
         self.blockSignals(old)
-        self.roi.setVisible(active)
+        for roi in self.rois:
+            roi.setVisible(active)
+
+    def setRois(self, rois, active_roi):
+        for roi in self.rois:
+            roi.setVisible(False)
+            roi.setEditable(False)
+        self.rois = list(rois)
+        self.roi = active_roi
+        active = self.isChecked()
+        for roi in self.rois:
+            roi.setVisible(active)
+            roi.setEditable(roi is active_roi)
+        if active and self.plot is not None:
+            self.plot.setInteractiveMode(
+                "select-draw", shape="rectangle", color=self.roi.getColor().name()
+            )
 
     def _actionTriggered(self, checked=False):
         plot = self.plot
         if plot is not None:
             if checked:
                 plot.setInteractiveMode(
-                    "select-draw", shape="rectangle", color=ROI_COLOR
+                    "select-draw", shape="rectangle", color=self.roi.getColor().name()
                 )
             else:
                 plot.resetInteractiveMode()

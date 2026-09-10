@@ -56,6 +56,7 @@ from .MapPlotContextMenu import MapPlotContextMenu
 from .OpenAxisDatasetAction import OpenAxisDatasetAction
 
 _LEGEND = "MAP"
+_RGB_LEGEND = "RGB_MAP"
 
 
 class MapPlotWidget(ImagePlotWidget):
@@ -76,6 +77,7 @@ class MapPlotWidget(ImagePlotWidget):
         self._scatter_item.setVisualization(scatter_item.Visualization.REGULAR_GRID)
         self._first_plot = True
         self._map_shape = None
+        self._rgb_data = None
 
         self._build_context_menu()
 
@@ -99,11 +101,13 @@ class MapPlotWidget(ImagePlotWidget):
         return action
 
     def _dataConverter(self, x, y):
-        value_data = self._scatter_item.getValueData(copy=False)
         index = self.getScatterIndex(x, y)
         if index is None:
             return
-
+        if self._rgb_data is not None:
+            row, col = numpy.unravel_index(index, self._map_shape)
+            return tuple(self._rgb_data[row, col])
+        value_data = self._scatter_item.getValueData(copy=False)
         return value_data[index]
 
     def findCenterOfNearestPixel(
@@ -216,6 +220,44 @@ class MapPlotWidget(ImagePlotWidget):
                 x2 = self._scatter_item.getXData(copy=False)
                 y2 = self._scatter_item.getYData(copy=False)
             self._scatter_item.setData(x2, y2, z)
+
+    def setRgbData(
+        self,
+        image: numpy.ndarray,
+        x: numpy.ndarray | None = None,
+        y: numpy.ndarray | None = None,
+        xlabel: str = "X",
+        ylabel: str = "Y",
+    ):
+        """Display an RGB image while retaining the scatter grid for picking."""
+        if image.ndim != 3 or image.shape[2] not in (3, 4):
+            raise ValueError("RGB map must have shape (rows, columns, 3 or 4)")
+        rows, cols = image.shape[:2]
+        if x is None:
+            x = numpy.arange(cols, dtype=float)
+        if y is None:
+            y = numpy.arange(rows, dtype=float)
+        x = numpy.asarray(x)
+        y = numpy.asarray(y)
+        if x.size != cols or y.size != rows:
+            raise RuntimeError("RGB map dimensions do not match its map axes")
+
+        self.setScatterData(
+            numpy.zeros((rows, cols), dtype=float), x, y, xlabel, ylabel
+        )
+        self._scatter_item.setAlpha(0.0)
+        self._rgb_data = numpy.asarray(image)
+        dx = (x[-1] - x[0]) / (x.size - 1) if x.size > 1 else 1.0
+        dy = (y[-1] - y[0]) / (y.size - 1) if y.size > 1 else 1.0
+        self.addImage(
+            self._rgb_data,
+            legend=_RGB_LEGEND,
+            origin=(x[0] - 0.5 * dx, y[0] - 0.5 * dy),
+            scale=(dx, dy),
+            resetzoom=False,
+        )
+        self._colorBarWidget.hide()
+        self.axis_dataset_action.setEnabled(False)
 
     def getImageIndices(self, x_data: float, y_data: float) -> ImageIndices | None:
         pixels = self.dataToPixel(x_data, y_data)
