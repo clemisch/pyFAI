@@ -126,6 +126,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._wavelength = ModifierDoubleSpinBox(self)
         self._wavelength.setDecimals(6)
         self._wavelength.setRange(0.000001, 100.0)
+        self._wavelength.setSingleStep(0.1)
         self._wavelength.valueChanged.connect(self._invalidateAllPhases)
         self._wavelength_lock = qt.QPushButton("Lock", self)
         self._wavelength_lock.setCheckable(True)
