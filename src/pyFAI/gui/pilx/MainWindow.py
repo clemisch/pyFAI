@@ -91,6 +91,7 @@ class MainWindow(qt.QMainWindow):
         self._background_point = None
         self._map_plot_widgets = []
         self._rgb_map_plot_widget = None
+        self._rgb_map_channel = "R"
         self._rietveld_python = rietveld_python or sys.executable
         self._mapped_refinement_result = None
         self._mapped_refinement_flags = None
@@ -127,6 +128,9 @@ class MainWindow(qt.QMainWindow):
         self._integrated_plot_widget.roiModeChanged.connect(self.roiModeChanged)
         self._integrated_plot_widget.activeRoiChanged.connect(
             self.drawContoursOnImage
+        )
+        self._integrated_plot_widget.rgbChannelChanged.connect(
+            self.setRgbMapChannel
         )
         self._integrated_plot_widget.fit_roi.sigRegionChanged.connect(self.updateFitBounds)
 
@@ -659,6 +663,11 @@ class MainWindow(qt.QMainWindow):
             self._map_tab_widget.setCurrentWidget(self._map_plot_widget)
         self.drawContoursOnImage()
 
+    def setRgbMapChannel(self, channel):
+        self._rgb_map_channel = channel
+        if self._rgb_map_plot_widget is not None:
+            self._rgb_map_plot_widget.setRgbChannel(channel)
+
     def drawContoursOnImage(self):
         v_min, v_max = self._integrated_plot_widget.activeRoi().getRange()
         if v_min is None or v_max is None:
@@ -789,24 +798,7 @@ class MainWindow(qt.QMainWindow):
             slow_name = slow.attrs.get("long_name", "Y")
             slow_values = slow[()]
 
-        normalized = []
-        for map_data in maps:
-            map_data = numpy.maximum(map_data, 0.0)
-            finite = map_data[numpy.isfinite(map_data)]
-            if finite.size == 0:
-                channel = numpy.zeros_like(map_data)
-            else:
-                lower, upper = numpy.percentile(finite, (1.0, 99.0))
-                if upper > lower:
-                    channel = numpy.clip(
-                        (map_data - lower) / (upper - lower), 0.0, 1.0
-                    )
-                else:
-                    channel = numpy.zeros_like(map_data)
-                channel[~numpy.isfinite(channel)] = 0.0
-            normalized.append(channel)
-        rgb = numpy.stack(normalized, axis=2)
-        rgb = numpy.rint(255.0 * rgb).astype(numpy.uint8)
+        rgb = numpy.stack(maps, axis=2)
 
         title = "2θ RGB"
         if corrected_channels == 3:
@@ -817,6 +809,7 @@ class MainWindow(qt.QMainWindow):
         self._rgb_map_plot_widget.setRgbData(
             rgb, fast_values, slow_values, fast_name, slow_name
         )
+        self._rgb_map_plot_widget.setRgbChannel(self._rgb_map_channel)
         if created and self._unfixed_indices is not None:
             coordinates = self._rgb_map_plot_widget.getMapPointCoordinates(
                 self._unfixed_indices
