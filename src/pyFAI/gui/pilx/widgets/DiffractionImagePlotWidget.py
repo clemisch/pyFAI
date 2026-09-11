@@ -37,6 +37,7 @@ __status__ = "development"
 
 import numpy
 from silx.gui import qt
+from silx.gui.plot.actions import PlotAction
 from silx.gui.plot.backends.BackendMatplotlib import BackendMatplotlibQt
 from silx.gui.plot.items import ImageData
 
@@ -60,6 +61,32 @@ class DetectorMatplotlibBackend(BackendMatplotlibQt):
             self.setKeepDataAspectRatio(keep_aspect)
 
 
+class DetectorRoiModeAction(PlotAction):
+    def __init__(self, plot, parent=None):
+        super().__init__(
+            plot,
+            icon="shape-circle",
+            text="2θ ROI mode",
+            tooltip="Select the 2θ ROI from the detector image",
+            triggered=self._actionTriggered,
+            checkable=True,
+            parent=parent,
+        )
+        self.plot.sigInteractiveModeChanged.connect(self._modeChanged)
+        self._modeChanged(None)
+
+    def _modeChanged(self, source):
+        old = self.blockSignals(True)
+        self.setChecked(self.plot.getInteractiveMode()["mode"] == "select")
+        self.blockSignals(old)
+
+    def _actionTriggered(self, checked=False):
+        if checked:
+            self.plot.setInteractiveMode("select", source=self)
+        else:
+            self.plot.resetInteractiveMode()
+
+
 class DiffractionImagePlotWidget(ImagePlotWidget):
 
     def __init__(self, parent=None, backend=None):
@@ -67,12 +94,25 @@ class DiffractionImagePlotWidget(ImagePlotWidget):
             backend = DetectorMatplotlibBackend
         super().__init__(parent, backend)
         self.setAxesMargins(left=0.10, top=0.16, right=0.03, bottom=0.10)
+        self._roi_mode_action = DetectorRoiModeAction(self, self._toolbar)
+        self._toolbar.insertAction(
+            self._toolbar.display_separator, self._roi_mode_action
+        )
+        self._roi_mode_action.trigger()
         image_item = self.addImage([[]], legend=_LEGEND, colormap=DEFAULT_COLORMAP)
         if not isinstance(image_item, ImageData):
             raise RuntimeError("addImage should return a ImageData instance")
         self._image_item = image_item
         self._first_plot = True
         self._reset_zoom_when_shown = False
+
+    def emitMouseClickSignal(self, signal_data):
+        if (
+            self.getInteractiveMode()["mode"] != "select"
+            or signal_data.get("button") != "left"
+        ):
+            return
+        super().emitMouseClickSignal(signal_data)
 
     def _dataConverter(self, x, y):
         image = self._image_item.getData(copy=False)
