@@ -298,7 +298,7 @@ class ReflectionOverlayDialog(qt.QDialog):
         self._stick_height.setDecimals(0)
         self._stick_height.setRange(1.0, 100.0)
         self._stick_height.setSingleStep(5.0)
-        self._stick_height.setValue(35.0)
+        self._stick_height.setValue(97.0)
         self._stick_height.setEnabled(False)
         self._stick_height.valueChanged.connect(self._emitOverlay)
         self._condense = qt.QCheckBox("Group reflections", self)
